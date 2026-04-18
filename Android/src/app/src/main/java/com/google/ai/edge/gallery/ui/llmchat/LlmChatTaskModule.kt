@@ -39,9 +39,12 @@ import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Category
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.runtime.runtimeHelper
+import com.google.ai.edge.litertlm.Content
+import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
 import dagger.Module
@@ -55,7 +58,9 @@ import kotlinx.coroutines.CoroutineScope
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // AI Chat.
 
-class LlmChatTask @Inject constructor() : CustomTask {
+class LlmChatTask @Inject constructor(
+  private val dataStoreRepository: DataStoreRepository,
+) : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_CHAT,
@@ -77,12 +82,16 @@ class LlmChatTask @Inject constructor() : CustomTask {
     model: Model,
     onDone: (String) -> Unit,
   ) {
+    val memory = dataStoreRepository.getLlmMemory()
+    val systemInstruction =
+      if (memory.isNotBlank()) Contents.of(listOf(Content.Text(memory))) else null
     model.runtimeHelper.initialize(
       context = context,
       model = model,
       supportImage = false,
       supportAudio = false,
       onDone = onDone,
+      systemInstruction = systemInstruction,
       coroutineScope = coroutineScope,
     )
   }
@@ -129,15 +138,17 @@ class LlmChatTask @Inject constructor() : CustomTask {
 internal object LlmChatTaskModule {
   @Provides
   @IntoSet
-  fun provideTask(): CustomTask {
-    return LlmChatTask()
+  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
+    return LlmChatTask(dataStoreRepository)
   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Ask image.
 
-class LlmAskImageTask @Inject constructor() : CustomTask {
+class LlmAskImageTask @Inject constructor(
+  private val dataStoreRepository: DataStoreRepository,
+) : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_ASK_IMAGE,
@@ -159,12 +170,16 @@ class LlmAskImageTask @Inject constructor() : CustomTask {
     model: Model,
     onDone: (String) -> Unit,
   ) {
+    val memory = dataStoreRepository.getLlmMemory()
+    val systemInstruction =
+      if (memory.isNotBlank()) Contents.of(listOf(Content.Text(memory))) else null
     model.runtimeHelper.initialize(
       context = context,
       model = model,
       supportImage = true,
       supportAudio = false,
       onDone = onDone,
+      systemInstruction = systemInstruction,
       coroutineScope = coroutineScope,
     )
   }
@@ -193,15 +208,17 @@ class LlmAskImageTask @Inject constructor() : CustomTask {
 internal object LlmAskImageModule {
   @Provides
   @IntoSet
-  fun provideTask(): CustomTask {
-    return LlmAskImageTask()
+  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
+    return LlmAskImageTask(dataStoreRepository)
   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Ask audio.
 
-class LlmAskAudioTask @Inject constructor() : CustomTask {
+class LlmAskAudioTask @Inject constructor(
+  private val dataStoreRepository: DataStoreRepository,
+) : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_ASK_AUDIO,
@@ -224,12 +241,16 @@ class LlmAskAudioTask @Inject constructor() : CustomTask {
     model: Model,
     onDone: (String) -> Unit,
   ) {
+    val memory = dataStoreRepository.getLlmMemory()
+    val systemInstruction =
+      if (memory.isNotBlank()) Contents.of(listOf(Content.Text(memory))) else null
     model.runtimeHelper.initialize(
       context = context,
       model = model,
       supportImage = false,
       supportAudio = true,
       onDone = onDone,
+      systemInstruction = systemInstruction,
       coroutineScope = coroutineScope,
     )
   }
@@ -258,7 +279,7 @@ class LlmAskAudioTask @Inject constructor() : CustomTask {
 internal object LlmAskAudioModule {
   @Provides
   @IntoSet
-  fun provideTask(): CustomTask {
-    return LlmAskAudioTask()
+  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
+    return LlmAskAudioTask(dataStoreRepository)
   }
 }

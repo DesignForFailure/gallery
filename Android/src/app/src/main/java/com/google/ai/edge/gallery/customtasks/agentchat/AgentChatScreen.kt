@@ -545,12 +545,25 @@ private fun resetSessionWithCurrentSkills(
 ) {
   val model = modelManagerViewModel.uiState.value.selectedModel
   val newSelectedSkills = skillManagerViewModel.getSelectedSkills()
+  val memory = viewModel.dataStoreRepository.getLlmMemory()
+  val systemInstruction = if (newSelectedSkills.isNotEmpty()) {
+    val basePrompt = if (memory.isNotBlank()) {
+      "User preferences / memory:\n$memory\n\n$curSystemPrompt"
+    } else {
+      curSystemPrompt
+    }
+    skillManagerViewModel.getSystemPrompt(basePrompt)
+  } else if (memory.isNotBlank()) {
+    com.google.ai.edge.gallery.ui.llmchat.buildSystemInstruction(
+      memory = memory, agentOrSkillPrefix = "", priorTranscript = "",
+    )
+  } else {
+    null
+  }
   viewModel.resetSession(
     task = task,
     model = model,
-    systemInstruction =
-      if (newSelectedSkills.isEmpty()) null
-      else skillManagerViewModel.getSystemPrompt(curSystemPrompt),
+    systemInstruction = systemInstruction,
     tools = listOf(tool(agentTools)),
     supportImage = true,
     supportAudio = true,

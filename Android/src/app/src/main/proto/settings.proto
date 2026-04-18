@@ -78,6 +78,9 @@ message Settings {
   // copybara:strip_end
 
   repeated string viewed_promo_id = 10;
+
+  // Persistent LLM memory injected as system instruction.
+  string llm_memory = 11;
 }
 
 message UserData {
@@ -132,4 +135,22 @@ message Cutout {
 // A collection of cutout, used in scrapbook demo.
 message CutoutCollection {
   repeated Cutout cutout = 1;
+}
+
+// A stored chat conversation.
+message StoredChat {
+  string id = 1;
+  string title = 2;
+  int64 created_at_ms = 3;
+  int64 updated_at_ms = 4;
+  string model_name = 5;
+  string task_id = 6;
+  string messages_json = 7;
+  string agent_system_prompt = 8;
+}
+
+// Collection of stored chats.
+message ChatHistoryCollection {
+  repeated StoredChat chat = 1;
+  map<string, string> active_chat_id_by_task = 2;
 }

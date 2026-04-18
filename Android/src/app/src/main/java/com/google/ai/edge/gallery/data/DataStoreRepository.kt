@@ -20,12 +20,14 @@ import androidx.datastore.core.DataStore
 import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.BenchmarkResult
 import com.google.ai.edge.gallery.proto.BenchmarkResults
+import com.google.ai.edge.gallery.proto.ChatHistoryCollection
 import com.google.ai.edge.gallery.proto.Cutout
 import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Settings
 import com.google.ai.edge.gallery.proto.Skill
 import com.google.ai.edge.gallery.proto.Skills
+import com.google.ai.edge.gallery.proto.StoredChat
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.proto.UserData
 import kotlinx.coroutines.flow.first
@@ -109,6 +111,20 @@ interface DataStoreRepository {
 
   /** Returns whether a promo with the specified ID has been viewed. */
   fun hasViewedPromo(promoId: String): Boolean
+
+  fun getLlmMemory(): String
+
+  fun setLlmMemory(memory: String)
+
+  fun getAllChats(): List<StoredChat>
+
+  fun saveChat(chat: StoredChat)
+
+  fun deleteChat(id: String)
+
+  fun getActiveChatId(taskId: String): String?
+
+  fun setActiveChatId(taskId: String, chatId: String?)
 }
 
 /** Repository for managing data using Proto DataStore. */
@@ -118,6 +134,7 @@ class DefaultDataStoreRepository(
   private val cutoutDataStore: DataStore<CutoutCollection>,
   private val benchmarkResultsDataStore: DataStore<BenchmarkResults>,
   private val skillsDataStore: DataStore<Skills>,
+  private val chatHistoryDataStore: DataStore<ChatHistoryCollection>,
 ) : DataStoreRepository {
   override fun saveTextInputHistory(history: List<String>) {
     runBlocking {
@@ -431,6 +448,64 @@ class DefaultDataStoreRepository(
     return runBlocking {
       val settings = dataStore.data.first()
       settings.viewedPromoIdList.contains(promoId)
+    }
+  }
+
+  override fun getLlmMemory(): String {
+    return runBlocking {
+      val settings = dataStore.data.first()
+      settings.llmMemory
+    }
+  }
+
+  override fun setLlmMemory(memory: String) {
+    runBlocking {
+      dataStore.updateData { settings -> settings.toBuilder().setLlmMemory(memory).build() }
+    }
+  }
+
+  override fun getAllChats(): List<StoredChat> {
+    return runBlocking { chatHistoryDataStore.data.first().chatList }
+  }
+
+  override fun saveChat(chat: StoredChat) {
+    runBlocking {
+      chatHistoryDataStore.updateData { collection ->
+        val existing = collection.chatList.indexOfFirst { it.id == chat.id }
+        if (existing >= 0) {
+          collection.toBuilder().setChat(existing, chat).build()
+        } else {
+          collection.toBuilder().addChat(0, chat).build()
+        }
+      }
+    }
+  }
+
+  override fun deleteChat(id: String) {
+    runBlocking {
+      chatHistoryDataStore.updateData { collection ->
+        val newChats = collection.chatList.filter { it.id != id }
+        collection.toBuilder().clearChat().addAllChat(newChats).build()
+      }
+    }
+  }
+
+  override fun getActiveChatId(taskId: String): String? {
+    return runBlocking {
+      val id = chatHistoryDataStore.data.first().activeChatIdByTaskMap[taskId]
+      if (id.isNullOrEmpty()) null else id
+    }
+  }
+
+  override fun setActiveChatId(taskId: String, chatId: String?) {
+    runBlocking {
+      chatHistoryDataStore.updateData { collection ->
+        if (chatId == null) {
+          collection.toBuilder().removeActiveChatIdByTask(taskId).build()
+        } else {
+          collection.toBuilder().putActiveChatIdByTask(taskId, chatId).build()
+        }
+      }
     }
   }
 }

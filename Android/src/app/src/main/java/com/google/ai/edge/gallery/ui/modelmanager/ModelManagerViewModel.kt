@@ -540,6 +540,14 @@ constructor(
     dataStoreRepository.saveTheme(theme = theme)
   }
 
+  fun getLlmMemory(): String {
+    return dataStoreRepository.getLlmMemory()
+  }
+
+  fun saveLlmMemory(memory: String) {
+    dataStoreRepository.setLlmMemory(memory)
+  }
+
   fun getModelUrlResponse(model: Model, accessToken: String? = null): Int {
     try {
       val url = URL(model.url)

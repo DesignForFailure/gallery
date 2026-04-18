@@ -21,8 +21,10 @@ import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.google.ai.edge.gallery.data.ConfigKeys
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.proto.StoredChat
 import com.google.ai.edge.gallery.runtime.runtimeHelper
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageError
@@ -41,6 +43,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 private const val TAG = "AGLlmChatViewModel"
@@ -341,7 +345,138 @@ open class LlmChatViewModelBase() : ChatViewModel() {
   }
 }
 
-@HiltViewModel class LlmChatViewModel @Inject constructor() : LlmChatViewModelBase()
+@HiltViewModel
+class LlmChatViewModel @Inject constructor(
+  val dataStoreRepository: DataStoreRepository,
+) : LlmChatViewModelBase() {
+
+  private val _chats = MutableStateFlow<List<StoredChat>>(emptyList())
+  val chats = _chats.asStateFlow()
+
+  private val activeChatIdByTask = mutableMapOf<String, String?>()
+
+  fun getActiveChatId(taskId: String): String? = activeChatIdByTask[taskId]
+
+  fun loadChats(taskId: String) {
+    val allChats = dataStoreRepository.getAllChats()
+    _chats.value = allChats.filter { it.taskId == taskId }
+    activeChatIdByTask[taskId] = dataStoreRepository.getActiveChatId(taskId)
+  }
+
+  fun persistCurrentChat(
+    model: Model,
+    taskId: String,
+    agentSystemPrompt: String = "",
+  ) {
+    val messages = uiState.value.messagesByModel[model.name] ?: return
+    if (messages.isEmpty()) return
+
+    val now = System.currentTimeMillis()
+    val existingId = activeChatIdByTask[taskId]
+    val chatId = existingId ?: java.util.UUID.randomUUID().toString()
+    val title = autoTitleFromMessages(messages)
+
+    val existingChat = if (existingId != null) {
+      _chats.value.find { it.id == existingId }
+    } else null
+
+    val chat = StoredChat.newBuilder()
+      .setId(chatId)
+      .setTitle(title)
+      .setCreatedAtMs(existingChat?.createdAtMs ?: now)
+      .setUpdatedAtMs(now)
+      .setModelName(model.name)
+      .setTaskId(taskId)
+      .setMessagesJson(messages.toPersistedJson())
+      .setAgentSystemPrompt(agentSystemPrompt)
+      .build()
+
+    dataStoreRepository.saveChat(chat)
+    activeChatIdByTask[taskId] = chatId
+    dataStoreRepository.setActiveChatId(taskId, chatId)
+    loadChats(taskId)
+  }
+
+  fun newChat(
+    task: Task,
+    model: Model,
+    taskId: String,
+    systemInstruction: Contents? = null,
+    supportImage: Boolean = false,
+    supportAudio: Boolean = false,
+  ) {
+    activeChatIdByTask[taskId] = null
+    dataStoreRepository.setActiveChatId(taskId, null)
+    resetSession(
+      task = task,
+      model = model,
+      systemInstruction = systemInstruction,
+      supportImage = supportImage,
+      supportAudio = supportAudio,
+    )
+  }
+
+  fun switchChat(
+    chat: StoredChat,
+    task: Task,
+    model: Model,
+    taskId: String,
+    systemInstruction: Contents? = null,
+    supportImage: Boolean = false,
+    supportAudio: Boolean = false,
+  ) {
+    persistCurrentChat(model = model, taskId = taskId)
+
+    val restoredMessages = chat.messagesJson.fromPersistedJson()
+    setMessages(model = model, messages = restoredMessages)
+
+    activeChatIdByTask[taskId] = chat.id
+    dataStoreRepository.setActiveChatId(taskId, chat.id)
+
+    viewModelScope.launch(Dispatchers.Default) {
+      setIsResettingSession(true)
+      stopResponse(model = model)
+      while (true) {
+        try {
+          model.runtimeHelper.resetConversation(
+            model = model,
+            supportImage = supportImage,
+            supportAudio = supportAudio,
+            systemInstruction = systemInstruction,
+          )
+          break
+        } catch (e: Exception) {
+          Log.d(TAG, "Failed to reset session for chat switch. Trying again")
+        }
+        delay(200)
+      }
+      setIsResettingSession(false)
+    }
+  }
+
+  fun deleteChatById(
+    chatId: String,
+    task: Task,
+    model: Model,
+    taskId: String,
+    systemInstruction: Contents? = null,
+    supportImage: Boolean = false,
+    supportAudio: Boolean = false,
+  ) {
+    dataStoreRepository.deleteChat(chatId)
+    if (activeChatIdByTask[taskId] == chatId) {
+      newChat(
+        task = task,
+        model = model,
+        taskId = taskId,
+        systemInstruction = systemInstruction,
+        supportImage = supportImage,
+        supportAudio = supportAudio,
+      )
+    }
+    loadChats(taskId)
+  }
+}
 
 @HiltViewModel class LlmAskImageViewModel @Inject constructor() : LlmChatViewModelBase()
 

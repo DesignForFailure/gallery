@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
@@ -106,6 +107,7 @@ fun SettingsDialog(
   val focusRequester = remember { FocusRequester() }
   val interactionSource = remember { MutableInteractionSource() }
   var showTos by remember { mutableStateOf(false) }
+  var llmMemory by remember { mutableStateOf(modelManagerViewModel.getLlmMemory()) }
 
   Dialog(onDismissRequest = onDismissed) {
     val focusManager = LocalFocusManager.current
@@ -184,6 +186,41 @@ fun SettingsDialog(
                   label = { Text(themeLabel(theme)) },
                 )
               }
+            }
+          }
+
+          // LLM Memory.
+          Column(
+            modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              "LLM Memory",
+              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+            )
+            Text(
+              "Injected as system instruction into every chat",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+              value = llmMemory,
+              onValueChange = { llmMemory = it },
+              placeholder = {
+                Text(
+                  "e.g. My name is Alice. I prefer concise answers.",
+                  style = MaterialTheme.typography.bodySmall,
+                )
+              },
+              minLines = 3,
+              maxLines = 6,
+              textStyle = MaterialTheme.typography.bodySmall,
+              modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(
+              onClick = { modelManagerViewModel.saveLlmMemory(llmMemory) },
+            ) {
+              Text("Save")
             }
           }
 

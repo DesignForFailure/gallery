@@ -23,9 +23,11 @@ import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Category
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
+import com.google.ai.edge.gallery.ui.llmchat.buildSystemInstruction
 import com.google.ai.edge.litertlm.tool
 import dagger.Module
 import dagger.Provides
@@ -35,7 +37,9 @@ import dagger.multibindings.IntoSet
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 
-class AgentChatTask @Inject constructor() : CustomTask {
+class AgentChatTask @Inject constructor(
+  private val dataStoreRepository: DataStoreRepository,
+) : CustomTask {
   private val agentTools = AgentTools()
 
   override val task: Task =
@@ -78,18 +82,27 @@ class AgentChatTask @Inject constructor() : CustomTask {
     onDone: (String) -> Unit,
   ) {
     agentTools.skillManagerViewModel.loadSkills {
+      val memory = dataStoreRepository.getLlmMemory()
+      val hasSkills = agentTools.skillManagerViewModel.getSelectedSkills().isNotEmpty()
+      val systemInstruction = if (hasSkills) {
+        val basePrompt = if (memory.isNotBlank()) {
+          "User preferences / memory:\n$memory\n\n${task.defaultSystemPrompt}"
+        } else {
+          task.defaultSystemPrompt
+        }
+        agentTools.skillManagerViewModel.getSystemPrompt(basePrompt)
+      } else if (memory.isNotBlank()) {
+        buildSystemInstruction(memory = memory, agentOrSkillPrefix = "", priorTranscript = "")
+      } else {
+        null
+      }
       LlmChatModelHelper.initialize(
         context = context,
         model = model,
         supportImage = true,
         supportAudio = true,
         onDone = onDone,
-        systemInstruction =
-          if (agentTools.skillManagerViewModel.getSelectedSkills().isEmpty()) {
-            null
-          } else {
-            agentTools.skillManagerViewModel.getSystemPrompt(task.defaultSystemPrompt)
-          },
+        systemInstruction = systemInstruction,
         tools = listOf(tool(agentTools)),
         enableConversationConstrainedDecoding = true,
       )
@@ -122,7 +135,7 @@ class AgentChatTask @Inject constructor() : CustomTask {
 internal object AgentChatTaskModule {
   @Provides
   @IntoSet
-  fun provideTask(): CustomTask {
-    return AgentChatTask()
+  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
+    return AgentChatTask(dataStoreRepository)
   }
 }

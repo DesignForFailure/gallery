@@ -24,9 +24,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -49,6 +56,7 @@ import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import kotlinx.coroutines.launch
 
 private const val TAG = "AGLlmChatScreen"
 
@@ -72,25 +80,126 @@ fun LlmChatScreen(
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
 ) {
-  ChatViewWrapper(
-    viewModel = viewModel,
-    modelManagerViewModel = modelManagerViewModel,
-    taskId = taskId,
-    navigateUp = navigateUp,
-    modifier = modifier,
-    onSkillClicked = onSkillClicked,
-    onFirstToken = onFirstToken,
-    onGenerateResponseDone = onGenerateResponseDone,
-    onResetSessionClickedOverride = onResetSessionClickedOverride,
-    composableBelowMessageList = composableBelowMessageList,
-    allowEditingSystemPrompt = allowEditingSystemPrompt,
-    curSystemPrompt = curSystemPrompt,
-    onSystemPromptChanged = onSystemPromptChanged,
-    emptyStateComposable = emptyStateComposable,
-    sendMessageTrigger = sendMessageTrigger,
-    showImagePicker = showImagePicker,
-    showAudioPicker = showAudioPicker,
-  )
+  val enableDrawer = taskId == BuiltInTaskId.LLM_CHAT || taskId == BuiltInTaskId.LLM_AGENT_CHAT
+  val drawerState = rememberDrawerState(DrawerValue.Closed)
+  val scope = rememberCoroutineScope()
+  val chats by viewModel.chats.collectAsState()
+  val activeChatId = viewModel.getActiveChatId(taskId)
+
+  LaunchedEffect(taskId) {
+    if (enableDrawer) viewModel.loadChats(taskId)
+  }
+
+  val memory = viewModel.dataStoreRepository.getLlmMemory()
+
+  val chatContent: @Composable () -> Unit = {
+    ChatViewWrapper(
+      viewModel = viewModel,
+      modelManagerViewModel = modelManagerViewModel,
+      taskId = taskId,
+      navigateUp = navigateUp,
+      modifier = modifier,
+      onSkillClicked = onSkillClicked,
+      onFirstToken = onFirstToken,
+      onGenerateResponseDone = { model ->
+        onGenerateResponseDone(model)
+        if (enableDrawer) {
+          viewModel.persistCurrentChat(
+            model = model,
+            taskId = taskId,
+            agentSystemPrompt = curSystemPrompt,
+          )
+        }
+      },
+      onResetSessionClickedOverride = onResetSessionClickedOverride,
+      composableBelowMessageList = composableBelowMessageList,
+      allowEditingSystemPrompt = allowEditingSystemPrompt,
+      curSystemPrompt = curSystemPrompt,
+      onSystemPromptChanged = onSystemPromptChanged,
+      emptyStateComposable = emptyStateComposable,
+      sendMessageTrigger = sendMessageTrigger,
+      showImagePicker = showImagePicker,
+      showAudioPicker = showAudioPicker,
+      onOpenChatListClicked = if (enableDrawer) {
+        { scope.launch { drawerState.open() } }
+      } else null,
+    )
+  }
+
+  if (enableDrawer) {
+    val task = modelManagerViewModel.getTaskById(id = taskId)!!
+    val selectedModel = modelManagerViewModel.uiState.collectAsState().value.selectedModel
+
+    ModalNavigationDrawer(
+      drawerState = drawerState,
+      drawerContent = {
+        ChatListDrawerContent(
+          chats = chats,
+          activeChatId = activeChatId,
+          onNewChat = {
+            scope.launch { drawerState.close() }
+            val sysInstr = buildSystemInstruction(
+              memory = memory,
+              agentOrSkillPrefix = "",
+              priorTranscript = "",
+            )
+            viewModel.newChat(
+              task = task,
+              model = selectedModel,
+              taskId = taskId,
+              systemInstruction = sysInstr,
+              supportImage = showImagePicker,
+              supportAudio = showAudioPicker,
+            )
+          },
+          onSwitchChat = { chat ->
+            scope.launch { drawerState.close() }
+            val transcript = chat.messagesJson.let { json ->
+              if (json.isBlank()) "" else {
+                val persisted: List<PersistedMessage> =
+                  kotlinx.serialization.json.Json.decodeFromString(json)
+                persisted.toTranscriptBlock()
+              }
+            }
+            val sysInstr = buildSystemInstruction(
+              memory = memory,
+              agentOrSkillPrefix = chat.agentSystemPrompt,
+              priorTranscript = transcript,
+            )
+            viewModel.switchChat(
+              chat = chat,
+              task = task,
+              model = selectedModel,
+              taskId = taskId,
+              systemInstruction = sysInstr,
+              supportImage = showImagePicker,
+              supportAudio = showAudioPicker,
+            )
+          },
+          onDeleteChat = { chat ->
+            val sysInstr = buildSystemInstruction(
+              memory = memory,
+              agentOrSkillPrefix = "",
+              priorTranscript = "",
+            )
+            viewModel.deleteChatById(
+              chatId = chat.id,
+              task = task,
+              model = selectedModel,
+              taskId = taskId,
+              systemInstruction = sysInstr,
+              supportImage = showImagePicker,
+              supportAudio = showAudioPicker,
+            )
+          },
+        )
+      },
+    ) {
+      chatContent()
+    }
+  } else {
+    chatContent()
+  }
 }
 
 @Composable
@@ -185,6 +294,7 @@ fun ChatViewWrapper(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  onOpenChatListClicked: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
@@ -286,5 +396,6 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
+    onOpenChatListClicked = onOpenChatListClicked,
   )
 }
