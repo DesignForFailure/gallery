@@ -25,10 +25,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Menu
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.rounded.MapsUgc
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -164,7 +164,7 @@ fun ModelPageAppBar(
         if (onOpenChatListClicked != null) {
           IconButton(onClick = onOpenChatListClicked) {
             Icon(
-              imageVector = Icons.AutoMirrored.Rounded.Menu,
+              imageVector = Icons.Rounded.Menu,
               contentDescription = stringResource(R.string.cd_open_chat_list_icon),
               tint = MaterialTheme.colorScheme.onSurface,
               modifier = Modifier.size(20.dp),
