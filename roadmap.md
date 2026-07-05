@@ -1,5 +1,22 @@
 # Roadmap: Chat Storage, LLM Memory, Thinking Toggle (Android / S24 Ultra)
 
+## Status (updated 2026-07-05)
+
+This fork was 433 commits behind upstream (`google-ai-edge/gallery`) and 309 ahead. Reconciling
+required merging upstream and re-evaluating this roadmap against what upstream had independently
+built in the meantime:
+
+1. **Multiple persistent chats** — Superseded by upstream. Upstream shipped its own, more mature
+   chat-history feature (`ChatSessionProto` in `UserData`, a history drawer, session IDs,
+   image/audio support, analytics). This fork's original `ChatPersistence.kt` /
+   `ChatListDrawer.kt` implementation was removed as dead code in favor of upstream's version.
+2. **LLM persistent memory** — Not present upstream. Re-implemented against the current codebase.
+3. **Prominent Normal / Thinking toggle** — Not present upstream (only the pre-existing
+   config-dialog gating). Re-implemented against the current codebase.
+
+The original detailed plan below reflects the pre-merge codebase (file paths/proto shapes for
+feature 1 are stale) but is kept for historical context.
+
 ## Context
 
 Google AI Edge Gallery is an Android app (Jetpack Compose + Hilt + proto DataStore + LiteRT-LM engine) that runs on-device LLMs. It currently has **in-memory-only** chat, no cross-session LLM memory, and a "thinking mode" switch buried three taps deep inside the per-model config dialog. This roadmap describes the **simplest, most efficient** way to add:

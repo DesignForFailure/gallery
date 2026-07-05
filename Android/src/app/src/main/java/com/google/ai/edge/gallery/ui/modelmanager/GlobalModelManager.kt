@@ -58,15 +58,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -85,14 +88,18 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.ui.common.TaskIcon
+import com.google.ai.edge.gallery.ui.common.buildTrackableUrlAnnotatedString
 import com.google.ai.edge.gallery.ui.common.modelitem.ModelItem
+import com.google.ai.edge.gallery.ui.common.tos.TosViewModel
 import kotlin.text.endsWith
 import kotlin.text.lowercase
 import kotlinx.coroutines.delay
@@ -108,6 +115,7 @@ fun GlobalModelManager(
   onModelSelected: (Task, Model) -> Unit,
   onBenchmarkClicked: (Model) -> Unit,
   modifier: Modifier = Modifier,
+  tosViewModel: TosViewModel? = null,
 ) {
   val uiState by viewModel.uiState.collectAsState()
   val builtInModels = remember { mutableStateListOf<Model>() }
@@ -116,8 +124,10 @@ fun GlobalModelManager(
   var modelForTaskCandidate by remember { mutableStateOf<Model?>(null) }
   var showTaskSelectorBottomSheet by remember { mutableStateOf(false) }
   var showImportModelSheet by remember { mutableStateOf(false) }
-  var showUnsupportedFileTypeDialog by remember { mutableStateOf(false) }
-  var showUnsupportedWebModelDialog by remember { mutableStateOf(false) }
+  var showHuggingFaceUrlDialog by remember { mutableStateOf(false) }
+  var huggingFaceUrlInput by remember { mutableStateOf("") }
+  var showUnsupportedModelDialog by remember { mutableStateOf(false) }
+  var unsupportedModelErrorMessage by remember { mutableStateOf("") }
   val selectedLocalModelFileUri = remember { mutableStateOf<Uri?>(null) }
   val selectedImportedModelInfo = remember { mutableStateOf<ImportedModel?>(null) }
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -140,19 +150,19 @@ fun GlobalModelManager(
     ) { result ->
       if (result.resultCode == android.app.Activity.RESULT_OK) {
         result.data?.data?.let { uri ->
-          val fileName = getFileName(context = context, uri = uri)
-          Log.d(TAG, "Selected file: $fileName")
-          // Show warning for model file types other than .task and .litertlm.
-          if (fileName != null && !fileName.endsWith(".task") && !fileName.endsWith(".litertlm")) {
-            showUnsupportedFileTypeDialog = true
-          }
-          // Show warning for web-only model (by checking if the file name has "-web" in it).
-          else if (fileName != null && fileName.lowercase().contains("-web")) {
-            showUnsupportedWebModelDialog = true
-          } else {
-            selectedLocalModelFileUri.value = uri
-            showImportDialog = true
-          }
+          validateAndProcessModelUri(
+            uri = uri,
+            context = context,
+            isWebImport = false,
+            onUnsupportedModelError = { errorMessage ->
+              unsupportedModelErrorMessage = errorMessage
+              showUnsupportedModelDialog = true
+            },
+            onValidModelUri = { validUri ->
+              selectedLocalModelFileUri.value = validUri
+              showImportDialog = true
+            },
+          )
         } ?: run { Log.d(TAG, "No file selected or URI is null.") }
       } else {
         Log.d(TAG, "File picking cancelled.")
@@ -160,18 +170,38 @@ fun GlobalModelManager(
     }
 
   LaunchedEffect(uiState.modelImportingUpdateTrigger) {
-    val allModelsSet = mutableSetOf<Model>()
-    for (task in uiState.tasks) {
-      for (model in task.models) {
-        allModelsSet.add(model)
-      }
-    }
-    val sortedModels = allModelsSet.toList().sortedBy { it.displayName.ifEmpty { it.name } }
+    val allowlistModels = viewModel.allowlistModels
+    val allowlistOrderMap = allowlistModels.withIndex().associate { it.value.name to it.index }
+
+    val sortedModels =
+      viewModel
+        .getAllModels()
+        // Filter to include only top-level models (those without a parent).
+        .filter { it.parentModelName.isNullOrEmpty() }
+        .sortedWith(
+          compareBy<Model> { model ->
+              // Sort by the index in allowlistModels. Models not in the allowlist come last.
+              allowlistOrderMap[model.name] ?: Int.MAX_VALUE
+            }
+            .thenBy { model ->
+              // If not in the allowlist, sort by their names.
+              model.name
+            }
+        )
     builtInModels.clear()
     builtInModels.addAll(sortedModels.filter { !it.imported })
     importedModels.clear()
     importedModels.addAll(sortedModels.filter { it.imported })
   }
+
+  // Calculate model variants by grouping models with a parentModelName.
+  val modelVariants by
+    remember(uiState.modelImportingUpdateTrigger) {
+      derivedStateOf {
+        val allModels = uiState.tasks.flatMap { it.models }.distinct()
+        allModels.filter { it.parentModelName != null }.groupBy { it.parentModelName!! }
+      }
+    }
 
   val handleClickModel: (Model) -> Unit = { model ->
     val tasks = viewModel.uiState.value.tasks
@@ -274,6 +304,7 @@ fun GlobalModelManager(
           val expanded = modelItemExpandedStates.getOrDefault(model.name, true)
           ModelItem(
             model = model,
+            modelVariants = modelVariants.getOrDefault(model.name, listOf()),
             task = null,
             modelManagerViewModel = viewModel,
             onModelClicked = handleClickModel,
@@ -281,6 +312,7 @@ fun GlobalModelManager(
             expanded = expanded,
             showBenchmarkButton = model.runtimeType == RuntimeType.LITERT_LM,
             onExpanded = { modelItemExpandedStates[model.name] = it },
+            tosViewModel = tosViewModel,
           )
         }
 
@@ -295,7 +327,7 @@ fun GlobalModelManager(
             )
           }
         }
-        items(importedModels) { model ->
+        items(importedModels, key = { it.name }) { model ->
           ModelItem(
             model = model,
             task = null,
@@ -304,6 +336,7 @@ fun GlobalModelManager(
             onBenchmarkClicked = onBenchmarkClicked,
             expanded = true,
             showBenchmarkButton = model.runtimeType == RuntimeType.LITERT_LM,
+            tosViewModel = tosViewModel,
           )
         }
       }
@@ -381,6 +414,12 @@ fun GlobalModelManager(
         style = MaterialTheme.typography.titleLarge,
         modifier = Modifier.padding(vertical = 4.dp, horizontal = 16.dp),
       )
+      Text(
+        stringResource(R.string.import_model_terms_subtitle),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+      )
       val cbImportFromLocalFile = stringResource(R.string.cd_import_model_from_local_file_button)
       Box(
         modifier =
@@ -413,6 +452,33 @@ fun GlobalModelManager(
         ) {
           Icon(Icons.AutoMirrored.Outlined.NoteAdd, contentDescription = null)
           Text("From local model file", modifier = Modifier.clearAndSetSemantics {})
+        }
+      }
+      val cdImportFromHuggingFace = stringResource(R.string.cd_import_model_from_hugging_face)
+      Box(
+        modifier =
+          Modifier.clickable {
+              scope.launch {
+                delay(200)
+                showImportModelSheet = false
+                showHuggingFaceUrlDialog = true
+              }
+            }
+            .semantics {
+              role = Role.Button
+              contentDescription = cdImportFromHuggingFace
+            }
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+        ) {
+          Icon(Icons.AutoMirrored.Outlined.NoteAdd, contentDescription = null)
+          Text(
+            stringResource(R.string.import_model_from_hugging_face),
+            modifier = Modifier.clearAndSetSemantics {},
+          )
         }
       }
     }
@@ -453,8 +519,8 @@ fun GlobalModelManager(
     }
   }
 
-  // Alert dialog for unsupported file type.
-  if (showUnsupportedFileTypeDialog) {
+  // Alert dialog for unsupported model.
+  if (showUnsupportedModelDialog) {
     AlertDialog(
       icon = {
         Icon(
@@ -463,37 +529,105 @@ fun GlobalModelManager(
           tint = MaterialTheme.colorScheme.error,
         )
       },
-      onDismissRequest = { showUnsupportedFileTypeDialog = false },
-      title = { Text("Unsupported file type") },
-      text = { Text("Only \".task\" or \".litertlm\" file type is supported.") },
+      onDismissRequest = { showUnsupportedModelDialog = false },
+      title = { Text(stringResource(R.string.unsupported_model_title)) },
+      text = { Text(unsupportedModelErrorMessage) },
       confirmButton = {
-        Button(onClick = { showUnsupportedFileTypeDialog = false }) {
+        Button(onClick = { showUnsupportedModelDialog = false }) {
           Text(stringResource(R.string.ok))
         }
       },
     )
   }
 
-  // Alert dialog for unsupported web model.
-  if (showUnsupportedWebModelDialog) {
+  if (showHuggingFaceUrlDialog) {
     AlertDialog(
-      icon = {
-        Icon(
-          Icons.Rounded.Error,
-          contentDescription = stringResource(R.string.cd_error),
-          tint = MaterialTheme.colorScheme.error,
-        )
+      onDismissRequest = { showHuggingFaceUrlDialog = false },
+      title = { Text(stringResource(R.string.import_from_hugging_face_title)) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            buildAnnotatedString {
+              append(stringResource(R.string.enter_hugging_face_url))
+              append(
+                buildTrackableUrlAnnotatedString(
+                  url = stringResource(R.string.enter_hugging_face_url_example_link),
+                  linkText = stringResource(R.string.enter_hugging_face_url_example_link),
+                )
+              )
+            }
+          )
+          OutlinedTextField(
+            value = huggingFaceUrlInput,
+            onValueChange = { huggingFaceUrlInput = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.hugging_face_url_placeholder)) },
+            singleLine = true,
+          )
+        }
       },
-      onDismissRequest = { showUnsupportedWebModelDialog = false },
-      title = { Text("Unsupported model type") },
-      text = { Text("Looks like the model is a web-only model and is not supported by the app.") },
       confirmButton = {
-        Button(onClick = { showUnsupportedWebModelDialog = false }) {
-          Text(stringResource(R.string.ok))
+        Button(
+          onClick = {
+            val url = huggingFaceUrlInput.trim()
+            if (url.isNotEmpty()) {
+              showHuggingFaceUrlDialog = false
+              val uri = url.toUri()
+              validateAndProcessModelUri(
+                uri = uri,
+                context = context,
+                isWebImport = true,
+                onUnsupportedModelError = { errorMessage ->
+                  unsupportedModelErrorMessage = errorMessage
+                  showUnsupportedModelDialog = true
+                },
+                onValidModelUri = { validUri ->
+                  selectedLocalModelFileUri.value = validUri
+                  showImportDialog = true
+                },
+              )
+            }
+          }
+        ) {
+          Text(stringResource(R.string.next))
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { showHuggingFaceUrlDialog = false }) {
+          Text(stringResource(R.string.cancel))
         }
       },
     )
   }
+}
+
+private fun validateAndProcessModelUri(
+  uri: Uri,
+  context: Context,
+  isWebImport: Boolean,
+  onUnsupportedModelError: (String) -> Unit,
+  onValidModelUri: (Uri) -> Unit,
+) {
+  val fileName = getFileName(context = context, uri = uri)
+  Log.d(TAG, "Validating URI: $uri, fileName: $fileName, isWebImport: $isWebImport")
+  val hasValidExtension =
+    if (isWebImport) {
+      fileName != null && fileName.endsWith(".litertlm")
+    } else {
+      fileName != null && (fileName.endsWith(".task") || fileName.endsWith(".litertlm"))
+    }
+
+  if (!hasValidExtension) {
+    onUnsupportedModelError(getErrorMessage(context, R.string.unsupported_file_type_error))
+  } else if (fileName != null && fileName.lowercase().contains("-web")) {
+    onUnsupportedModelError(getErrorMessage(context, R.string.unsupported_web_model_error))
+  } else {
+    onValidModelUri(uri)
+  }
+}
+
+private fun getErrorMessage(context: Context, resId: Int): String {
+  return context.getString(resId)
 }
 
 // Helper function to get the file name from a URI
@@ -507,7 +641,7 @@ private fun getFileName(context: Context, uri: Uri): String? {
         }
       }
     }
-  } else if (uri.scheme == "file") {
+  } else if (uri.scheme == "file" || uri.scheme == "http" || uri.scheme == "https") {
     return uri.lastPathSegment
   }
   return null

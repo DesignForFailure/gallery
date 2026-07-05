@@ -135,7 +135,7 @@ fun SettingsDialog(
           )
           // Subtitle.
           Text(
-            "App version: ${BuildConfig.VERSION_NAME}",
+            "App version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             style = labelSmallNarrow,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.offset(y = (-6).dp),
@@ -300,11 +300,11 @@ fun SettingsDialog(
             verticalArrangement = Arrangement.spacedBy(4.dp),
           ) {
             Text(
-              stringResource(R.string.settings_dialog_llm_memory_title),
+              "LLM memory",
               style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
             )
             Text(
-              stringResource(R.string.settings_dialog_llm_memory_description),
+              "Remembered across all chats and injected into every conversation.",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -316,13 +316,13 @@ fun SettingsDialog(
               },
               placeholder = {
                 Text(
-                  stringResource(R.string.settings_dialog_llm_memory_placeholder),
+                  "e.g. “Always respond concisely. My name is Alex.”",
                   style = MaterialTheme.typography.bodySmall,
                 )
               },
               minLines = 3,
               maxLines = 6,
-              textStyle = MaterialTheme.typography.bodyMedium,
+              textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface),
               modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             )
             Row(
@@ -331,18 +331,18 @@ fun SettingsDialog(
             ) {
               OutlinedButton(
                 onClick = {
-                  modelManagerViewModel.saveLlmMemory(llmMemory.trim())
+                  modelManagerViewModel.saveLlmMemory(llmMemory.trim(), context)
                   llmMemory = llmMemory.trim()
                   llmMemorySaved = true
                   focusManager.clearFocus()
                 },
                 enabled = !llmMemorySaved,
               ) {
-                Text(stringResource(R.string.settings_dialog_llm_memory_save))
+                Text("Save")
               }
               if (llmMemorySaved) {
                 Text(
-                  stringResource(R.string.settings_dialog_llm_memory_saved),
+                  "Memory saved",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

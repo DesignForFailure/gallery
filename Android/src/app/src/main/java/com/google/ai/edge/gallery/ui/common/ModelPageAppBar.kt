@@ -16,22 +16,18 @@
 
 package com.google.ai.edge.gallery.ui.common
 
-import androidx.compose.foundation.background
+import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.Psychology
-import androidx.compose.material.icons.rounded.MapsUgc
-import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,19 +42,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
+import com.google.ai.edge.gallery.BuildConfig
+import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.ModelCapability
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
+import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.convertValueToTargetType
+import com.google.ai.edge.gallery.firebaseAnalytics
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 
@@ -73,9 +73,6 @@ fun ModelPageAppBar(
   inProgress: Boolean,
   modelPreparing: Boolean,
   modifier: Modifier = Modifier,
-  isResettingSession: Boolean = false,
-  onResetSessionClicked: (Model) -> Unit = {},
-  canShowResetSessionButton: Boolean = false,
   hideModelSelector: Boolean = false,
   useThemeColor: Boolean = false,
   onConfigChanged: (oldConfigValues: Map<String, Any>, newConfigValues: Map<String, Any>) -> Unit =
@@ -84,7 +81,8 @@ fun ModelPageAppBar(
   allowEditingSystemPrompt: Boolean = false,
   curSystemPrompt: String = "",
   onSystemPromptChanged: (String) -> Unit = {},
-  onOpenChatListClicked: (() -> Unit)? = null,
+  shouldShowHistoryButton: Boolean = false,
+  onHistoryClicked: (Model) -> Unit = {},
 ) {
   var showConfigDialog by remember { mutableStateOf(false) }
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -147,30 +145,14 @@ fun ModelPageAppBar(
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       val showConfigButton = model.configs.isNotEmpty() && downloadSucceeded
-      val showResetSessionButton = canShowResetSessionButton && downloadSucceeded
       // Reading the trigger makes this recompose whenever config values change, either through
       // the config dialog or the thinking toggle below.
       @Suppress("UNUSED_VARIABLE") val configValuesUpdateTrigger =
         modelManagerUiState.configValuesUpdateTrigger
-      val supportThinking =
-        model.getBooleanConfigValue(key = ConfigKeys.SUPPORT_THINKING, defaultValue = false)
-      val showThinkingToggle = task.allowThinking() && supportThinking && downloadSucceeded
+      val showThinkingToggle =
+        downloadSucceeded && task.allowCapability(ModelCapability.LLM_THINKING, model)
 
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.End,
-      ) {
-        // The chat list button.
-        if (onOpenChatListClicked != null) {
-          IconButton(onClick = onOpenChatListClicked) {
-            Icon(
-              imageVector = Icons.Rounded.Menu,
-              contentDescription = stringResource(R.string.cd_open_chat_list_icon),
-              tint = MaterialTheme.colorScheme.onSurface,
-              modifier = Modifier.size(20.dp),
-            )
-          }
-        }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
         // The thinking mode toggle.
         if (showThinkingToggle) {
           val thinkingEnabled =
@@ -215,39 +197,21 @@ fun ModelPageAppBar(
             )
           }
         }
-        // The reset session button.
-        if (showResetSessionButton) {
-          if (isResettingSession) {
-            Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-              CircularProgressIndicator(
-                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(16.dp),
-              )
-            }
-          } else {
-            val enableResetButton =
-              !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized
-            IconButton(
-              onClick = { onResetSessionClicked(model) },
-              enabled = enableResetButton,
-              modifier = Modifier.alpha(if (!enableResetButton) 0.5f else 1f),
-            ) {
-              Box(
-                modifier =
-                  Modifier.size(32.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainer),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.Rounded.MapsUgc,
-                  contentDescription = stringResource(R.string.cd_reset_session_icon),
-                  tint = MaterialTheme.colorScheme.onSurface,
-                  modifier = Modifier.size(20.dp),
-                )
-              }
-            }
+        // The chat history button.
+        if (downloadSucceeded && shouldShowHistoryButton) {
+          val enableHistoryButton =
+            !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized
+          IconButton(
+            onClick = { onHistoryClicked(model) },
+            enabled = enableHistoryButton,
+            modifier = Modifier.alpha(if (!enableHistoryButton) 0.5f else 1f),
+          ) {
+            Icon(
+              imageVector = Icons.Rounded.History,
+              contentDescription = stringResource(R.string.cd_chat_history),
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(20.dp),
+            )
           }
         }
       }
@@ -264,8 +228,23 @@ fun ModelPageAppBar(
     if (task.id != BuiltInTaskId.LLM_TINY_GARDEN) {
       modelConfigs.removeIf { it.key == ConfigKeys.RESET_CONVERSATION_TURN_COUNT }
     }
-    if (!task.allowThinking()) {
+    if (!task.allowCapability(ModelCapability.LLM_THINKING, model)) {
       modelConfigs.removeIf { it.key == ConfigKeys.ENABLE_THINKING }
+    }
+    var supportsSpeculativeDecoding = false
+    // Check if the model file supports speculative decoding.
+    try {
+      com.google.ai.edge.litertlm.Capabilities(model.getPath(context)).use {
+        supportsSpeculativeDecoding = it.hasSpeculativeDecodingSupport()
+      }
+    } catch (e: Exception) {
+      // Ignore exceptions and assume not supported.
+    }
+    if (
+      !supportsSpeculativeDecoding ||
+        !task.allowCapability(ModelCapability.SPECULATIVE_DECODING, model)
+    ) {
+      modelConfigs.removeIf { it.key == ConfigKeys.ENABLE_SPECULATIVE_DECODING }
     }
     ConfigDialog(
       title = "Configurations",
@@ -300,8 +279,22 @@ fun ModelPageAppBar(
             break
           }
         }
+        val systemPromptChanged = newSystemPrompt != oldSystemPrompt
+
+        if (!same || systemPromptChanged) {
+          firebaseAnalytics?.logEvent(
+            GalleryEvent.MODEL_CONFIG_CHANGE.id,
+            Bundle().apply {
+              putString("model_id", model.name)
+              putString("capability_name", task.id)
+              putString("model_version", model.version)
+              putString("app_version", BuildConfig.VERSION_NAME)
+            },
+          )
+        }
+
         if (same) {
-          if (newSystemPrompt != oldSystemPrompt) {
+          if (systemPromptChanged) {
             onSystemPromptChanged(newSystemPrompt)
           }
           return@ConfigDialog
@@ -333,7 +326,9 @@ fun ModelPageAppBar(
           onConfigChanged(oldConfigValues, model.configValues)
         }
       },
-      showSystemPromptEditorTab = allowEditingSystemPrompt,
+      // AICore doesn't support system prompt yet.
+      showSystemPromptEditorTab =
+        allowEditingSystemPrompt && model.runtimeType != RuntimeType.AICORE,
       defaultSystemPrompt = task.defaultSystemPrompt,
       curSystemPrompt = curSystemPrompt,
     )

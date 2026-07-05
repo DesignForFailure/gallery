@@ -17,6 +17,8 @@ syntax = "proto3";
 
 package com.google.ai.edge.gallery.proto;
 
+import "chat_history.proto";
+
 option java_package = "com.google.ai.edge.gallery.proto";
 option java_multiple_files = true;
 
@@ -46,6 +48,8 @@ message ImportedModel {
   oneof config {
     LlmConfig llm_config = 3;
   }
+  // Only set for models imported from url.
+  string url = 4;
 }
 
 message LlmConfig {
@@ -59,6 +63,7 @@ message LlmConfig {
   bool support_tiny_garden = 8;
   bool support_mobile_actions = 9;
   bool support_thinking = 10;
+  bool support_speculative_decoding = 11;
 }
 
 message Settings {
@@ -83,41 +88,27 @@ message Settings {
   string llm_memory = 11;
 }
 
-// A single persisted chat session.
-message StoredChat {
-  // UUID.
-  string id = 1;
+message McpAuth {
+  message RequestHeader {
+    string header_name = 1;
+    string header_value = 2;
+  }
 
-  // Auto-generated from the first user message (40 char cap).
-  string title = 2;
+  message OAuth {}
 
-  int64 created_at_ms = 3;
-  int64 updated_at_ms = 4;
-
-  // Name of the model the chat was created with.
-  string model_name = 5;
-
-  // Task the chat belongs to (e.g. "llm_chat" or "llm_agent_chat").
-  string task_id = 6;
-
-  // JSON array of PersistedMessage (see ChatPersistence.kt).
-  string messages_json = 7;
-
-  // Agent Chat only: remembered custom system prompt.
-  string agent_system_prompt = 8;
-}
-
-// All persisted chats.
-message ChatHistoryCollection {
-  repeated StoredChat chat = 1;
-
-  // Maps task id (e.g. "llm_chat") to the id of its active chat.
-  map<string, string> active_chat_id_by_task = 2;
+  oneof auth_method {
+    bool none = 1;
+    RequestHeader request_header = 2;
+    OAuth oauth = 3;
+  }
 }
 
 message UserData {
   AccessTokenData access_token_data = 1;
   map<string, string> secrets = 2;
+  repeated ChatSessionProto chat_sessions = 3;
+  // MCP server URL to MCP auth data.
+  map<string, McpAuth> mcp_auths = 4;
 }
 
 enum FillMode {

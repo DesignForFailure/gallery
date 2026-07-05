@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,25 +14,26 @@
  * limitations under the License.
  */
 
-package com.google.ai.edge.gallery
+package com.google.ai.edge.gallery.customtasks.agentchat
 
 import androidx.datastore.core.CorruptionException
 import androidx.datastore.core.Serializer
-import com.google.ai.edge.gallery.proto.ChatHistoryCollection
+import com.google.ai.edge.gallery.proto.McpServers
 import com.google.protobuf.InvalidProtocolBufferException
 import java.io.InputStream
 import java.io.OutputStream
 
-object ChatHistorySerializer : Serializer<ChatHistoryCollection> {
-  override val defaultValue: ChatHistoryCollection = ChatHistoryCollection.getDefaultInstance()
+/** [Serializer] for [McpServers] to be used with ProtoDataStore. */
+object McpServersSerializer : Serializer<McpServers> {
+  override val defaultValue: McpServers = McpServers.getDefaultInstance()
 
-  override suspend fun readFrom(input: InputStream): ChatHistoryCollection {
+  override suspend fun readFrom(input: InputStream): McpServers {
     try {
-      return ChatHistoryCollection.parseFrom(input)
+      return McpServers.parseFrom(input)
     } catch (exception: InvalidProtocolBufferException) {
-      throw CorruptionException("Cannot read proto.", exception)
+      throw CorruptionException("Cannot read mcp servers proto.", exception)
     }
   }
 
-  override suspend fun writeTo(t: ChatHistoryCollection, output: OutputStream) = t.writeTo(output)
+  override suspend fun writeTo(t: McpServers, output: OutputStream) = t.writeTo(output)
 }
