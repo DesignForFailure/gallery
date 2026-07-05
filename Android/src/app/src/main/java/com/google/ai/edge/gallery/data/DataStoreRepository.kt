@@ -101,6 +101,12 @@ interface DataStoreRepository {
 
   suspend fun deleteSkills(names: Set<String>)
 
+  /** Returns the global LLM memory injected as a system instruction for LLM tasks. */
+  fun getLlmMemory(): String
+
+  /** Saves the global LLM memory. */
+  fun setLlmMemory(memory: String)
+
   /** Records that a promo with the specified ID has been viewed. */
   fun addViewedPromoId(promoId: String)
 
@@ -398,6 +404,16 @@ class DefaultDataStoreRepository(
     skillsDataStore.updateData { skills ->
       val newSkills = skills.skillList.filter { it.name !in names }
       skills.toBuilder().clearSkill().addAllSkill(newSkills).build()
+    }
+  }
+
+  override fun getLlmMemory(): String {
+    return runBlocking { dataStore.data.first().llmMemory }
+  }
+
+  override fun setLlmMemory(memory: String) {
+    runBlocking {
+      dataStore.updateData { settings -> settings.toBuilder().setLlmMemory(memory).build() }
     }
   }
 

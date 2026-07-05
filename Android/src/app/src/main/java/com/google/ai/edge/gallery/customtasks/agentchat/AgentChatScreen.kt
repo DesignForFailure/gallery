@@ -83,6 +83,7 @@ import com.google.ai.edge.gallery.common.LOCAL_URL_BASE
 import com.google.ai.edge.gallery.common.PermissionResult
 import com.google.ai.edge.gallery.common.RequestPermissionAgentAction
 import com.google.ai.edge.gallery.common.SkillProgressAgentAction
+import com.google.ai.edge.gallery.common.SystemPromptHelper
 import com.google.ai.edge.gallery.data.AgentSkillsURLs
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
@@ -766,12 +767,14 @@ private fun resetSessionWithCurrentSkillsAndMcps(
   }
   val toolsPrompt = agentTools.mcpManagerViewModel.getToolsPrompt()
   val actualSystemPrompt = getEffectiveBaseSystemPrompt(curSystemPrompt, toolsPrompt.isNotEmpty())
+  val actualSystemPromptWithMemory =
+    SystemPromptHelper.withMemory(actualSystemPrompt, viewModel.getLlmMemory())
   viewModel.resetSession(
     task = task,
     model = model,
     systemInstruction =
       injectSkillsAndMcpTools(
-        baseSystemPrompt = actualSystemPrompt,
+        baseSystemPrompt = actualSystemPromptWithMemory,
         skills = skillManagerViewModel.getSelectedSkills(),
         toolsPrompt = toolsPrompt,
       ),

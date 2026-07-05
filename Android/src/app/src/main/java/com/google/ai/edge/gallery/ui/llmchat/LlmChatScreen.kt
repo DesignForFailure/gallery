@@ -54,6 +54,7 @@ import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import com.google.ai.edge.gallery.common.SystemPromptHelper
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Message
 
@@ -326,7 +327,8 @@ fun ChatViewWrapper(
         viewModel.resetSession(
           task = task,
           model = model,
-          systemInstruction = Contents.of(curSystemPrompt),
+          systemInstruction =
+            Contents.of(SystemPromptHelper.withMemory(curSystemPrompt, viewModel.getLlmMemory())),
           supportImage = showImagePicker,
           supportAudio = showAudioPicker,
           initialMessages = litertMessages,

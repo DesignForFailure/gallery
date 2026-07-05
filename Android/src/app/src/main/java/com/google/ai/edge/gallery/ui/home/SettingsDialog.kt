@@ -48,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
@@ -102,6 +103,8 @@ fun SettingsDialog(
       .withLocale(Locale.getDefault())
   }
   var customHfToken by remember { mutableStateOf("") }
+  var llmMemory by remember { mutableStateOf(modelManagerViewModel.getLlmMemory()) }
+  var llmMemorySaved by remember { mutableStateOf(true) }
   var isFocused by remember { mutableStateOf(false) }
   val focusRequester = remember { FocusRequester() }
   val interactionSource = remember { MutableInteractionSource() }
@@ -287,6 +290,62 @@ fun SettingsDialog(
                     }
                   }
                 }
+              }
+            }
+          }
+
+          // LLM memory.
+          Column(
+            modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              "LLM memory",
+              style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+            )
+            Text(
+              "Remembered across all chats and injected into every conversation.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+              value = llmMemory,
+              onValueChange = {
+                llmMemory = it
+                llmMemorySaved = false
+              },
+              placeholder = {
+                Text(
+                  "e.g. “Always respond concisely. My name is Alex.”",
+                  style = MaterialTheme.typography.bodySmall,
+                )
+              },
+              minLines = 3,
+              maxLines = 6,
+              textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface),
+              modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              OutlinedButton(
+                onClick = {
+                  modelManagerViewModel.saveLlmMemory(llmMemory.trim(), context)
+                  llmMemory = llmMemory.trim()
+                  llmMemorySaved = true
+                  focusManager.clearFocus()
+                },
+                enabled = !llmMemorySaved,
+              ) {
+                Text("Save")
+              }
+              if (llmMemorySaved) {
+                Text(
+                  "Memory saved",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
               }
             }
           }

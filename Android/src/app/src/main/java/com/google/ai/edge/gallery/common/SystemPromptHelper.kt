@@ -29,6 +29,12 @@ object SystemPromptHelper {
    * Returns the user-defined custom prompt from the [SystemPromptRepository] if available;
    * otherwise, falls back to the task's default system prompt.
    *
+   * This is the raw, editable prompt — it deliberately excludes the global LLM memory (see
+   * [withMemory]) since callers also use it to populate the system-prompt editor UI; folding
+   * memory in here would let a user's "save" action bake the memory text into their saved custom
+   * prompt. Callers that build the actual system instruction sent to the model should wrap this
+   * result with [withMemory].
+   *
    * @param repo The optional [SystemPromptRepository] for custom overrides. If null, returns the
    *   default.
    * @param task The target [Task] containing the identifier and the default fallback system prompt.
@@ -38,5 +44,11 @@ object SystemPromptHelper {
     if (repo == null) return task.defaultSystemPrompt
     val customPrompt = repo.getCustomSystemPrompt(task.id).firstOrNull()
     return customPrompt ?: task.defaultSystemPrompt
+  }
+
+  /** Prepends the global LLM memory, if non-blank, to [basePrompt]. */
+  fun withMemory(basePrompt: String, llmMemory: String): String {
+    if (llmMemory.isBlank()) return basePrompt
+    return "User preferences / memory:\n$llmMemory\n\n$basePrompt"
   }
 }

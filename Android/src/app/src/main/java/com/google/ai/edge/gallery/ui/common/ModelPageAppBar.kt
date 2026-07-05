@@ -18,13 +18,13 @@ package com.google.ai.edge.gallery.ui.common
 
 import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -141,22 +141,53 @@ fun ModelPageAppBar(
         )
       }
     },
-    // The config button for the model (if existed).
+    // Action buttons at the end of the app bar.
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       val showConfigButton = model.configs.isNotEmpty() && downloadSucceeded
-      Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        var configButtonOffset = 0.dp
-        if (showConfigButton && shouldShowHistoryButton) {
-          configButtonOffset = (-40).dp
+      // Reading the trigger makes this recompose whenever config values change, either through
+      // the config dialog or the thinking toggle below.
+      @Suppress("UNUSED_VARIABLE") val configValuesUpdateTrigger =
+        modelManagerUiState.configValuesUpdateTrigger
+      val showThinkingToggle =
+        downloadSucceeded && task.allowCapability(ModelCapability.LLM_THINKING, model)
+
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+        // The thinking mode toggle.
+        if (showThinkingToggle) {
+          val thinkingEnabled =
+            model.getBooleanConfigValue(key = ConfigKeys.ENABLE_THINKING, defaultValue = false)
+          val enableThinkingToggle = !isModelInitializing && !inProgress && isModelInitialized
+          IconButton(
+            onClick = {
+              val newConfigValues = model.configValues.toMutableMap()
+              newConfigValues[ConfigKeys.ENABLE_THINKING.label] = !thinkingEnabled
+              model.configValues = newConfigValues
+              // Thinking is a per-request flag so no model re-initialization is needed. Bumping
+              // the trigger refreshes this toggle and the config dialog.
+              modelManagerViewModel.updateConfigValuesUpdateTrigger()
+            },
+            enabled = enableThinkingToggle,
+            modifier = Modifier.alpha(if (!enableThinkingToggle) 0.5f else 1f),
+          ) {
+            Icon(
+              imageVector =
+                if (thinkingEnabled) Icons.Filled.Psychology else Icons.Outlined.Psychology,
+              contentDescription = stringResource(R.string.cd_toggle_thinking_icon),
+              tint =
+                if (thinkingEnabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(20.dp),
+            )
+          }
         }
+        // The config button for the model (if existed).
         if (showConfigButton) {
           val enableConfigButton = !isModelInitializing && !inProgress && isModelInitialized
           IconButton(
             onClick = { showConfigDialog = true },
             enabled = enableConfigButton,
-            modifier =
-              Modifier.offset(x = configButtonOffset).alpha(if (!enableConfigButton) 0.5f else 1f),
+            modifier = Modifier.alpha(if (!enableConfigButton) 0.5f else 1f),
           ) {
             Icon(
               imageVector = Icons.Rounded.Tune,
@@ -166,6 +197,7 @@ fun ModelPageAppBar(
             )
           }
         }
+        // The chat history button.
         if (downloadSucceeded && shouldShowHistoryButton) {
           val enableHistoryButton =
             !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized

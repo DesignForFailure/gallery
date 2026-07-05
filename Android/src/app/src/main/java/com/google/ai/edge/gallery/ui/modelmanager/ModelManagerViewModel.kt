@@ -471,13 +471,15 @@ constructor(
 
       // Call the model initialization function.
       val systemPrompt = SystemPromptHelper.getEffectiveSystemPrompt(systemPromptRepository, task)
+      val systemPromptWithMemory =
+        SystemPromptHelper.withMemory(systemPrompt, dataStoreRepository.getLlmMemory())
       withContext(Dispatchers.IO) {
         getCustomTaskByTaskId(id = task.id)
           ?.initializeModelFn(
             context = context,
             coroutineScope = viewModelScope,
             model = model,
-            systemInstruction = Contents.of(systemPrompt),
+            systemInstruction = Contents.of(systemPromptWithMemory),
             onDone = onDoneFn,
           )
       }
@@ -603,6 +605,31 @@ constructor(
   fun clearTextInputHistory() {
     _uiState.update { it.copy(textInputHistory = mutableListOf()) }
     dataStoreRepository.saveTextInputHistory(_uiState.value.textInputHistory)
+  }
+
+  fun getLlmMemory(): String {
+    return dataStoreRepository.getLlmMemory()
+  }
+
+  /**
+   * Saves the global LLM memory.
+   *
+   * If a model is currently initialized, it is re-initialized so the new memory is reflected in
+   * its system instruction right away instead of waiting for the next natural (re-)initialization.
+   */
+  fun saveLlmMemory(memory: String, context: Context) {
+    dataStoreRepository.setLlmMemory(memory)
+
+    for (task in uiState.value.tasks) {
+      for (model in task.models) {
+        if (
+          uiState.value.modelInitializationStatus[model.name]?.status ==
+            ModelInitializationStatusType.INITIALIZED
+        ) {
+          initializeModel(context = context, task = task, model = model, force = true)
+        }
+      }
+    }
   }
 
   fun readThemeOverride(): Theme {

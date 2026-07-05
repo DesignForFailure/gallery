@@ -83,6 +83,9 @@ message Settings {
   // copybara:strip_end
 
   repeated string viewed_promo_id = 10;
+
+  // Global memory injected as a system instruction for LLM tasks.
+  string llm_memory = 11;
 }
 
 message McpAuth {

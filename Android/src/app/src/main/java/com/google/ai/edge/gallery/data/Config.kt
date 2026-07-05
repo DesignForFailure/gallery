@@ -278,7 +278,15 @@ fun createLlmChatConfigs(
       .toMutableList()
 
   if (supportThinking) {
-    configs.add(BooleanSwitchConfig(key = ConfigKeys.ENABLE_THINKING, defaultValue = false))
+    // Thinking is a per-request flag (passed via extraContext at inference time), so toggling it
+    // must not trigger a costly model re-initialization.
+    configs.add(
+      BooleanSwitchConfig(
+        key = ConfigKeys.ENABLE_THINKING,
+        defaultValue = false,
+        needReinitialization = false,
+      )
+    )
   }
   if (supportSpeculativeDecoding) {
     configs.add(
