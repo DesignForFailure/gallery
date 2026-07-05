@@ -24,9 +24,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +48,7 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.proto.StoredChat
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageImage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
@@ -49,6 +57,7 @@ import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import kotlinx.coroutines.launch
 
 private const val TAG = "AGLlmChatScreen"
 
@@ -71,6 +80,10 @@ fun LlmChatScreen(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  agentSystemPromptProvider: (() -> String)? = null,
+  onChatActivated: ((StoredChat) -> Unit)? = null,
+  systemInstructionBuilder: ChatSystemInstructionBuilder? = null,
+  sessionResetter: ChatSessionResetter? = null,
 ) {
   ChatViewWrapper(
     viewModel = viewModel,
@@ -90,6 +103,10 @@ fun LlmChatScreen(
     sendMessageTrigger = sendMessageTrigger,
     showImagePicker = showImagePicker,
     showAudioPicker = showAudioPicker,
+    agentSystemPromptProvider = agentSystemPromptProvider,
+    onChatActivated = onChatActivated,
+    systemInstructionBuilder = systemInstructionBuilder,
+    sessionResetter = sessionResetter,
   )
 }
 
@@ -185,12 +202,57 @@ fun ChatViewWrapper(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  agentSystemPromptProvider: (() -> String)? = null,
+  onChatActivated: ((StoredChat) -> Unit)? = null,
+  systemInstructionBuilder: ChatSystemInstructionBuilder? = null,
+  sessionResetter: ChatSessionResetter? = null,
 ) {
   val context = LocalContext.current
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
   val allowThinking = task.allowThinking()
 
-  ChatView(
+  // Chat history (persistent chats) support.
+  val enableChatHistory = taskId in CHAT_HISTORY_TASK_IDS
+  val scope = rememberCoroutineScope()
+  val drawerState = rememberDrawerState(DrawerValue.Closed)
+  val chats by viewModel.chats.collectAsState()
+  val activeChatId by viewModel.activeChatId.collectAsState()
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+  val selectedModel = modelManagerUiState.selectedModel
+
+  // Composes the system instruction for a chat session. Plain chat tasks combine the global LLM
+  // memory with the pseudo-replay transcript; Agent Chat supplies its own builder that also
+  // layers the skill prompt.
+  val instructionBuilder: ChatSystemInstructionBuilder =
+    systemInstructionBuilder
+      ?: { memory, transcript, _ -> buildSystemInstruction(memory = memory, priorTranscript = transcript) }
+  val resetter: ChatSessionResetter =
+    sessionResetter
+      ?: { curTask, curModel, systemInstruction, onDone ->
+        viewModel.resetSession(
+          task = curTask,
+          model = curModel,
+          systemInstruction = systemInstruction,
+          supportImage = showImagePicker,
+          supportAudio = showAudioPicker,
+          onDone = onDone,
+        )
+      }
+  val currentAgentSystemPrompt = { agentSystemPromptProvider?.invoke() ?: "" }
+
+  if (enableChatHistory) {
+    // Restore the active stored chat into the UI when entering the screen (or switching models).
+    // The LLM session itself gets the stored transcript through the system instruction composed
+    // during model initialization.
+    LaunchedEffect(selectedModel.name) {
+      viewModel.restoreActiveChat(taskId = taskId, model = selectedModel) { storedChat ->
+        onChatActivated?.invoke(storedChat)
+      }
+    }
+  }
+
+  val chatView: @Composable () -> Unit = {
+    ChatView(
     task = task,
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
@@ -223,7 +285,16 @@ fun ChatViewWrapper(
           images = images,
           audioMessages = audioMessages,
           onFirstToken = onFirstToken,
-          onDone = { onGenerateResponseDone(model) },
+          onDone = {
+            if (enableChatHistory) {
+              viewModel.persistCurrentChat(
+                model = model,
+                taskId = taskId,
+                agentSystemPrompt = currentAgentSystemPrompt(),
+              )
+            }
+            onGenerateResponseDone(model)
+          },
           onError = { errorMessage ->
             viewModel.handleError(
               context = context,
@@ -262,12 +333,22 @@ fun ChatViewWrapper(
     },
     onBenchmarkClicked = { _, _, _, _ -> },
     onResetSessionClicked = { model ->
-      if (onResetSessionClickedOverride != null) {
+      if (enableChatHistory) {
+        // Resetting the session starts a new chat so the current one stays intact in history.
+        viewModel.newChat(
+          task = task,
+          model = model,
+          agentSystemPrompt = currentAgentSystemPrompt(),
+          systemInstructionBuilder = instructionBuilder,
+          sessionResetter = resetter,
+        )
+      } else if (onResetSessionClickedOverride != null) {
         onResetSessionClickedOverride(task, model)
       } else {
         viewModel.resetSession(
           task = task,
           model = model,
+          systemInstruction = buildSystemInstruction(memory = viewModel.getLlmMemory()),
           supportImage = showImagePicker,
           supportAudio = showAudioPicker,
         )
@@ -286,5 +367,65 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
+    onOpenChatListClicked =
+      if (enableChatHistory) {
+        { scope.launch { drawerState.open() } }
+      } else {
+        null
+      },
   )
+  }
+
+  if (enableChatHistory) {
+    ModalNavigationDrawer(
+      drawerState = drawerState,
+      // Only intercept horizontal swipes while the drawer is open to avoid conflicting with
+      // in-chat gestures.
+      gesturesEnabled = drawerState.isOpen,
+      drawerContent = {
+        ChatListDrawerContent(
+          chats = chats,
+          activeChatId = activeChatId,
+          onNewChatClicked = {
+            scope.launch { drawerState.close() }
+            viewModel.newChat(
+              task = task,
+              model = selectedModel,
+              agentSystemPrompt = currentAgentSystemPrompt(),
+              systemInstructionBuilder = instructionBuilder,
+              sessionResetter = resetter,
+            )
+          },
+          onChatClicked = { storedChat ->
+            scope.launch { drawerState.close() }
+            if (storedChat.id != activeChatId) {
+              viewModel.switchChat(
+                task = task,
+                model = selectedModel,
+                targetChat = storedChat,
+                currentAgentSystemPrompt = currentAgentSystemPrompt(),
+                systemInstructionBuilder = instructionBuilder,
+                sessionResetter = resetter,
+                onActivated = { onChatActivated?.invoke(it) },
+              )
+            }
+          },
+          onDeleteChatClicked = { storedChat ->
+            viewModel.deleteChat(
+              task = task,
+              model = selectedModel,
+              chatId = storedChat.id,
+              agentSystemPrompt = currentAgentSystemPrompt(),
+              systemInstructionBuilder = instructionBuilder,
+              sessionResetter = resetter,
+            )
+          },
+        )
+      },
+    ) {
+      chatView()
+    }
+  } else {
+    chatView()
+  }
 }

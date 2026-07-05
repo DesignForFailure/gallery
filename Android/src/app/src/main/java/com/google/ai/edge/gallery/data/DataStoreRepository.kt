@@ -20,12 +20,14 @@ import androidx.datastore.core.DataStore
 import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.BenchmarkResult
 import com.google.ai.edge.gallery.proto.BenchmarkResults
+import com.google.ai.edge.gallery.proto.ChatHistoryCollection
 import com.google.ai.edge.gallery.proto.Cutout
 import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Settings
 import com.google.ai.edge.gallery.proto.Skill
 import com.google.ai.edge.gallery.proto.Skills
+import com.google.ai.edge.gallery.proto.StoredChat
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.proto.UserData
 import kotlinx.coroutines.flow.first
@@ -101,6 +103,27 @@ interface DataStoreRepository {
 
   suspend fun deleteSkills(names: Set<String>)
 
+  /** Returns the global LLM memory injected as a system instruction for LLM tasks. */
+  fun getLlmMemory(): String
+
+  /** Saves the global LLM memory. */
+  fun setLlmMemory(memory: String)
+
+  /** Returns all stored chats. */
+  fun getAllChats(): List<StoredChat>
+
+  /** Adds or updates (matched by id) a stored chat. */
+  fun upsertChat(chat: StoredChat)
+
+  /** Deletes the stored chat with the specified id. */
+  fun deleteChat(chatId: String)
+
+  /** Returns the active chat id for the specified task, or empty string if none. */
+  fun getActiveChatId(taskId: String): String
+
+  /** Sets the active chat id for the specified task. */
+  fun setActiveChatId(taskId: String, chatId: String)
+
   /** Records that a promo with the specified ID has been viewed. */
   fun addViewedPromoId(promoId: String)
 
@@ -118,6 +141,7 @@ class DefaultDataStoreRepository(
   private val cutoutDataStore: DataStore<CutoutCollection>,
   private val benchmarkResultsDataStore: DataStore<BenchmarkResults>,
   private val skillsDataStore: DataStore<Skills>,
+  private val chatHistoryDataStore: DataStore<ChatHistoryCollection>,
 ) : DataStoreRepository {
   override fun saveTextInputHistory(history: List<String>) {
     runBlocking {
@@ -403,6 +427,56 @@ class DefaultDataStoreRepository(
     skillsDataStore.updateData { skills ->
       val newSkills = skills.skillList.filter { it.name !in names }
       skills.toBuilder().clearSkill().addAllSkill(newSkills).build()
+    }
+  }
+
+  override fun getLlmMemory(): String {
+    return runBlocking { dataStore.data.first().llmMemory }
+  }
+
+  override fun setLlmMemory(memory: String) {
+    runBlocking {
+      dataStore.updateData { settings -> settings.toBuilder().setLlmMemory(memory).build() }
+    }
+  }
+
+  override fun getAllChats(): List<StoredChat> {
+    return runBlocking { chatHistoryDataStore.data.first().chatList }
+  }
+
+  override fun upsertChat(chat: StoredChat) {
+    runBlocking {
+      chatHistoryDataStore.updateData { chats ->
+        val index = chats.chatList.indexOfFirst { it.id == chat.id }
+        if (index >= 0) {
+          chats.toBuilder().setChat(index, chat).build()
+        } else {
+          chats.toBuilder().addChat(chat).build()
+        }
+      }
+    }
+  }
+
+  override fun deleteChat(chatId: String) {
+    runBlocking {
+      chatHistoryDataStore.updateData { chats ->
+        val newChats = chats.chatList.filter { it.id != chatId }
+        chats.toBuilder().clearChat().addAllChat(newChats).build()
+      }
+    }
+  }
+
+  override fun getActiveChatId(taskId: String): String {
+    return runBlocking {
+      chatHistoryDataStore.data.first().activeChatIdByTaskMap[taskId] ?: ""
+    }
+  }
+
+  override fun setActiveChatId(taskId: String, chatId: String) {
+    runBlocking {
+      chatHistoryDataStore.updateData { chats ->
+        chats.toBuilder().putActiveChatIdByTask(taskId, chatId).build()
+      }
     }
   }
 

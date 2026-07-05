@@ -78,6 +78,41 @@ message Settings {
   // copybara:strip_end
 
   repeated string viewed_promo_id = 10;
+
+  // Global memory injected as a system instruction for LLM tasks.
+  string llm_memory = 11;
+}
+
+// A single persisted chat session.
+message StoredChat {
+  // UUID.
+  string id = 1;
+
+  // Auto-generated from the first user message (40 char cap).
+  string title = 2;
+
+  int64 created_at_ms = 3;
+  int64 updated_at_ms = 4;
+
+  // Name of the model the chat was created with.
+  string model_name = 5;
+
+  // Task the chat belongs to (e.g. "llm_chat" or "llm_agent_chat").
+  string task_id = 6;
+
+  // JSON array of PersistedMessage (see ChatPersistence.kt).
+  string messages_json = 7;
+
+  // Agent Chat only: remembered custom system prompt.
+  string agent_system_prompt = 8;
+}
+
+// All persisted chats.
+message ChatHistoryCollection {
+  repeated StoredChat chat = 1;
+
+  // Maps task id (e.g. "llm_chat") to the id of its active chat.
+  map<string, string> active_chat_id_by_task = 2;
 }
 
 message UserData {

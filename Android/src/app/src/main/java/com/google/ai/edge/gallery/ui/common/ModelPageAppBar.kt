@@ -21,11 +21,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Menu
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.rounded.MapsUgc
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -82,6 +84,7 @@ fun ModelPageAppBar(
   allowEditingSystemPrompt: Boolean = false,
   curSystemPrompt: String = "",
   onSystemPromptChanged: (String) -> Unit = {},
+  onOpenChatListClicked: (() -> Unit)? = null,
 ) {
   var showConfigDialog by remember { mutableStateOf(false) }
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -140,23 +143,69 @@ fun ModelPageAppBar(
         )
       }
     },
-    // The config button for the model (if existed).
+    // Action buttons at the end of the app bar.
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       val showConfigButton = model.configs.isNotEmpty() && downloadSucceeded
       val showResetSessionButton = canShowResetSessionButton && downloadSucceeded
-      Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        var configButtonOffset = 0.dp
-        if (showConfigButton && canShowResetSessionButton) {
-          configButtonOffset = (-40).dp
+      // Reading the trigger makes this recompose whenever config values change, either through
+      // the config dialog or the thinking toggle below.
+      @Suppress("UNUSED_VARIABLE") val configValuesUpdateTrigger =
+        modelManagerUiState.configValuesUpdateTrigger
+      val supportThinking =
+        model.getBooleanConfigValue(key = ConfigKeys.SUPPORT_THINKING, defaultValue = false)
+      val showThinkingToggle = task.allowThinking() && supportThinking && downloadSucceeded
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
+      ) {
+        // The chat list button.
+        if (onOpenChatListClicked != null) {
+          IconButton(onClick = onOpenChatListClicked) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Rounded.Menu,
+              contentDescription = stringResource(R.string.cd_open_chat_list_icon),
+              tint = MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(20.dp),
+            )
+          }
         }
+        // The thinking mode toggle.
+        if (showThinkingToggle) {
+          val thinkingEnabled =
+            model.getBooleanConfigValue(key = ConfigKeys.ENABLE_THINKING, defaultValue = false)
+          val enableThinkingToggle = !isModelInitializing && !inProgress && isModelInitialized
+          IconButton(
+            onClick = {
+              val newConfigValues = model.configValues.toMutableMap()
+              newConfigValues[ConfigKeys.ENABLE_THINKING.label] = !thinkingEnabled
+              model.configValues = newConfigValues
+              // Thinking is a per-request flag so no model re-initialization is needed. Bumping
+              // the trigger refreshes this toggle and the config dialog.
+              modelManagerViewModel.updateConfigValuesUpdateTrigger()
+            },
+            enabled = enableThinkingToggle,
+            modifier = Modifier.alpha(if (!enableThinkingToggle) 0.5f else 1f),
+          ) {
+            Icon(
+              imageVector =
+                if (thinkingEnabled) Icons.Filled.Psychology else Icons.Outlined.Psychology,
+              contentDescription = stringResource(R.string.cd_toggle_thinking_icon),
+              tint =
+                if (thinkingEnabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+        }
+        // The config button for the model (if existed).
         if (showConfigButton) {
           val enableConfigButton = !isModelInitializing && !inProgress && isModelInitialized
           IconButton(
             onClick = { showConfigDialog = true },
             enabled = enableConfigButton,
-            modifier =
-              Modifier.offset(x = configButtonOffset).alpha(if (!enableConfigButton) 0.5f else 1f),
+            modifier = Modifier.alpha(if (!enableConfigButton) 0.5f else 1f),
           ) {
             Icon(
               imageVector = Icons.Rounded.Tune,
@@ -166,13 +215,16 @@ fun ModelPageAppBar(
             )
           }
         }
+        // The reset session button.
         if (showResetSessionButton) {
           if (isResettingSession) {
-            CircularProgressIndicator(
-              trackColor = MaterialTheme.colorScheme.surfaceVariant,
-              strokeWidth = 2.dp,
-              modifier = Modifier.size(16.dp),
-            )
+            Box(modifier = Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+              CircularProgressIndicator(
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(16.dp),
+              )
+            }
           } else {
             val enableResetButton =
               !isModelInitializing && !modelPreparing && !inProgress && isModelInitialized

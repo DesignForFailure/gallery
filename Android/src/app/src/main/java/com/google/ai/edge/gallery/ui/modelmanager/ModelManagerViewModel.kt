@@ -532,6 +532,20 @@ constructor(
     dataStoreRepository.saveTextInputHistory(_uiState.value.textInputHistory)
   }
 
+  fun getLlmMemory(): String {
+    return dataStoreRepository.getLlmMemory()
+  }
+
+  /**
+   * Saves the global LLM memory.
+   *
+   * The memory is injected as (part of) the system instruction whenever a model is initialized,
+   * so sessions started after the save will pick it up automatically.
+   */
+  fun saveLlmMemory(memory: String) {
+    dataStoreRepository.setLlmMemory(memory)
+  }
+
   fun readThemeOverride(): Theme {
     return dataStoreRepository.readTheme()
   }
