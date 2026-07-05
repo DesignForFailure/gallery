@@ -99,6 +99,13 @@ abstract class ChatViewModel() : ViewModel() {
     _uiState.update { _uiState.value.copy(messagesByModel = newMessagesByModel) }
   }
 
+  /** Replaces all messages for the model in a single state update. */
+  fun setMessages(model: Model, messages: List<ChatMessage>) {
+    val newMessagesByModel = _uiState.value.messagesByModel.toMutableMap()
+    newMessagesByModel[model.name] = messages.toMutableList()
+    _uiState.update { _uiState.value.copy(messagesByModel = newMessagesByModel) }
+  }
+
   fun clearAllMessages(model: Model) {
     val newMessagesByModel = _uiState.value.messagesByModel.toMutableMap()
     newMessagesByModel[model.name] = mutableListOf()

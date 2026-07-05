@@ -682,10 +682,14 @@ constructor(
     // Skill name: skill_name_3
     // Description: skill_description_3
     // ------
-    val selectedSkillsNamesAndDescriptions = getSelectedSkillsNamesAndDescriptions()
-    val systemPrompt = baseSystemPrompt.replace("___SKILLS___", selectedSkillsNamesAndDescriptions)
+    val systemPrompt = getSystemPromptText(baseSystemPrompt)
     Log.d(TAG, "System prompt:\n$systemPrompt")
     return Contents.of(systemPrompt)
+  }
+
+  /** Same as [getSystemPrompt] but returns the raw text for further composition. */
+  fun getSystemPromptText(baseSystemPrompt: String): String {
+    return baseSystemPrompt.replace("___SKILLS___", getSelectedSkillsNamesAndDescriptions())
   }
 
   fun getSkill(name: String): Skill? {

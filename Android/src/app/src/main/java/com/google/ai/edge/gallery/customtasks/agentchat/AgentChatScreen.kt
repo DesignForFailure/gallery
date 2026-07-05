@@ -95,6 +95,7 @@ import com.google.ai.edge.gallery.ui.common.chat.LogMessageLevel
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatScreen
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatViewModel
+import com.google.ai.edge.gallery.ui.llmchat.buildSystemInstruction
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.litertlm.tool
@@ -318,6 +319,35 @@ fun AgentChatScreen(
             )
           }
         },
+      )
+    },
+    // Chat history integration: remember the agent's custom system prompt per stored chat, and
+    // compose system instructions as skill prompt + memory + pseudo-replay transcript.
+    agentSystemPromptProvider = { curSystemPrompt },
+    onChatActivated = { storedChat ->
+      curSystemPrompt = storedChat.agentSystemPrompt.ifEmpty { task.defaultSystemPrompt }
+    },
+    systemInstructionBuilder = { memory, transcript, agentSystemPrompt ->
+      val basePrompt = agentSystemPrompt.ifEmpty { curSystemPrompt }
+      val skillPrefix =
+        if (skillManagerViewModel.getSelectedSkills().isEmpty()) ""
+        else skillManagerViewModel.getSystemPromptText(basePrompt)
+      buildSystemInstruction(
+        memory = memory,
+        agentOrSkillPrefix = skillPrefix,
+        priorTranscript = transcript,
+      )
+    },
+    sessionResetter = { curTask, model, systemInstruction, onDone ->
+      viewModel.resetSession(
+        task = curTask,
+        model = model,
+        systemInstruction = systemInstruction,
+        tools = listOf(tool(agentTools)),
+        supportImage = true,
+        supportAudio = true,
+        onDone = onDone,
+        enableConversationConstrainedDecoding = true,
       )
     },
     allowEditingSystemPrompt = true,
@@ -545,12 +575,17 @@ private fun resetSessionWithCurrentSkills(
 ) {
   val model = modelManagerViewModel.uiState.value.selectedModel
   val newSelectedSkills = skillManagerViewModel.getSelectedSkills()
+  val skillPrefix =
+    if (newSelectedSkills.isEmpty()) ""
+    else skillManagerViewModel.getSystemPromptText(curSystemPrompt)
   viewModel.resetSession(
     task = task,
     model = model,
     systemInstruction =
-      if (newSelectedSkills.isEmpty()) null
-      else skillManagerViewModel.getSystemPrompt(curSystemPrompt),
+      buildSystemInstruction(
+        memory = viewModel.getLlmMemory(),
+        agentOrSkillPrefix = skillPrefix,
+      ),
     tools = listOf(tool(agentTools)),
     supportImage = true,
     supportAudio = true,

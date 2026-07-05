@@ -23,9 +23,11 @@ import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Category
+import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
+import com.google.ai.edge.gallery.ui.llmchat.composeInitSystemInstruction
 import com.google.ai.edge.litertlm.tool
 import dagger.Module
 import dagger.Provides
@@ -35,7 +37,8 @@ import dagger.multibindings.IntoSet
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 
-class AgentChatTask @Inject constructor() : CustomTask {
+class AgentChatTask @Inject constructor(private val dataStoreRepository: DataStoreRepository) :
+  CustomTask {
   private val agentTools = AgentTools()
 
   override val task: Task =
@@ -78,18 +81,33 @@ class AgentChatTask @Inject constructor() : CustomTask {
     onDone: (String) -> Unit,
   ) {
     agentTools.skillManagerViewModel.loadSkills {
+      // Base prompt follows the active stored chat's remembered custom system prompt (if any).
+      val activeChatId = dataStoreRepository.getActiveChatId(task.id)
+      val storedAgentSystemPrompt =
+        if (activeChatId.isEmpty()) ""
+        else
+          dataStoreRepository.getAllChats().find { it.id == activeChatId }?.agentSystemPrompt ?: ""
+      val basePrompt = storedAgentSystemPrompt.ifEmpty { task.defaultSystemPrompt }
+      val skillPrefix =
+        if (agentTools.skillManagerViewModel.getSelectedSkills().isEmpty()) {
+          ""
+        } else {
+          agentTools.skillManagerViewModel.getSystemPromptText(basePrompt)
+        }
       LlmChatModelHelper.initialize(
         context = context,
         model = model,
         supportImage = true,
         supportAudio = true,
         onDone = onDone,
+        // Layer the skill prompt with the global LLM memory and the active stored chat's
+        // transcript so restored chats continue seamlessly.
         systemInstruction =
-          if (agentTools.skillManagerViewModel.getSelectedSkills().isEmpty()) {
-            null
-          } else {
-            agentTools.skillManagerViewModel.getSystemPrompt(task.defaultSystemPrompt)
-          },
+          composeInitSystemInstruction(
+            dataStoreRepository = dataStoreRepository,
+            taskId = task.id,
+            agentOrSkillPrefix = skillPrefix,
+          ),
         tools = listOf(tool(agentTools)),
         enableConversationConstrainedDecoding = true,
       )
@@ -122,7 +140,7 @@ class AgentChatTask @Inject constructor() : CustomTask {
 internal object AgentChatTaskModule {
   @Provides
   @IntoSet
-  fun provideTask(): CustomTask {
-    return AgentChatTask()
+  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
+    return AgentChatTask(dataStoreRepository = dataStoreRepository)
   }
 }
