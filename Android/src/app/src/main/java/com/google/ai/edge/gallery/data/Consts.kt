@@ -36,17 +36,22 @@ const val KEY_MODEL_EXTRA_DATA_DOWNLOAD_FILE_NAMES = "KEY_MODEL_EXTRA_DATA_DOWNL
 const val KEY_MODEL_IS_ZIP = "KEY_MODEL_IS_ZIP"
 const val KEY_MODEL_UNZIPPED_DIR = "KEY_MODEL_UNZIPPED_DIR"
 const val KEY_MODEL_START_UNZIPPING = "KEY_MODEL_START_UNZIPPING"
+const val KEY_MODEL_IS_IMPORTED = "KEY_MODEL_IS_IMPORTED"
 
 // Default values for LLM models.
 const val DEFAULT_MAX_TOKEN = 1024
 const val DEFAULT_TOPK = 64
 const val DEFAULT_TOPP = 0.95f
 const val DEFAULT_TEMPERATURE = 1.0f
+const val DEFAULT_MAX_OUTPUT_TOKEN = 1024
 val DEFAULT_ACCELERATORS = listOf(Accelerator.GPU)
 val DEFAULT_VISION_ACCELERATOR = Accelerator.GPU
 
 // Max number of images allowed in a "ask image" session.
 const val MAX_IMAGE_COUNT = 10
+
+// Max number of images allowed in a "ask image" session for AI Core.
+const val MAX_IMAGE_COUNT_AI_CORE = 1
 
 // Max number of skills recommended in a "agent skills" session.
 const val MAX_RECOMMENDED_SKILL_COUNT = 15
@@ -74,3 +79,9 @@ val SOC =
       ""
     })
     .lowercase()
+
+// URLs for Agent Skills.
+object AgentSkillsURLs {
+  const val REPOSITORY = "https://github.com/google-ai-edge/gallery/tree/main/skills"
+  const val DISCUSSIONS = "https://github.com/google-ai-edge/gallery/discussions/categories/skills"
+}

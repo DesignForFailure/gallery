@@ -46,6 +46,7 @@ data class ConfigKey(val id: String, val label: String)
 
 object ConfigKeys {
   val MAX_TOKENS = ConfigKey("max_tokens", "Max tokens")
+  val MAX_OUTPUT_TOKENS = ConfigKey("max_output_tokens", "Max output tokens")
   val TOPK = ConfigKey("topk", "TopK")
   val TOPP = ConfigKey("topp", "TopP")
   val TEMPERATURE = ConfigKey("temperature", "Temperature")
@@ -58,7 +59,11 @@ object ConfigKeys {
   val SUPPORT_TINY_GARDEN = ConfigKey("support_tiny_garden", "Support tiny garden")
   val SUPPORT_MOBILE_ACTIONS = ConfigKey("support_mobile_actions", "Support mobile actions")
   val SUPPORT_THINKING = ConfigKey("support_thinking", "Support thinking")
+  val SUPPORT_SPECULATIVE_DECODING =
+    ConfigKey("support_speculative_decoding", "Support speculative decoding")
   val ENABLE_THINKING = ConfigKey("enable_thinking", "Enable thinking")
+  val ENABLE_SPECULATIVE_DECODING =
+    ConfigKey("enable_speculative_decoding", "Enable speculative decoding")
   val MAX_RESULT_COUNT = ConfigKey("max_result_count", "Max result count")
   val USE_GPU = ConfigKey("use_gpu", "Use GPU")
   val ACCELERATOR = ConfigKey("accelerator", "Accelerator")
@@ -226,6 +231,7 @@ fun createLlmChatConfigs(
   defaultTemperature: Float = DEFAULT_TEMPERATURE,
   accelerators: List<Accelerator> = DEFAULT_ACCELERATORS,
   supportThinking: Boolean = false,
+  supportSpeculativeDecoding: Boolean = false,
 ): List<Config> {
   var maxTokensConfig: Config =
     LabelConfig(key = ConfigKeys.MAX_TOKENS, defaultValue = "$defaultMaxToken")
@@ -244,7 +250,7 @@ fun createLlmChatConfigs(
         maxTokensConfig,
         NumberSliderConfig(
           key = ConfigKeys.TOPK,
-          sliderMin = 5f,
+          sliderMin = 1f,
           sliderMax = 100f,
           defaultValue = defaultTopK.toFloat(),
           valueType = ValueType.INT,
@@ -272,14 +278,11 @@ fun createLlmChatConfigs(
       .toMutableList()
 
   if (supportThinking) {
-    // Thinking is a per-request flag (passed via extraContext at inference time), so toggling it
-    // must not trigger a costly model re-initialization.
+    configs.add(BooleanSwitchConfig(key = ConfigKeys.ENABLE_THINKING, defaultValue = false))
+  }
+  if (supportSpeculativeDecoding) {
     configs.add(
-      BooleanSwitchConfig(
-        key = ConfigKeys.ENABLE_THINKING,
-        defaultValue = false,
-        needReinitialization = false,
-      )
+      BooleanSwitchConfig(key = ConfigKeys.ENABLE_SPECULATIVE_DECODING, defaultValue = false)
     )
   }
   return configs
@@ -296,6 +299,49 @@ fun createLlmChatConfigsForNpuModel(
 ): List<Config> {
   return listOf(
     LabelConfig(key = ConfigKeys.MAX_TOKENS, defaultValue = "$defaultMaxToken"),
+    SegmentedButtonConfig(
+      key = ConfigKeys.ACCELERATOR,
+      defaultValue = accelerators[0].label,
+      options = accelerators.map { it.label },
+    ),
+  )
+}
+
+/**
+ * Creates the configuration settings for an AICore model.
+ *
+ * AICore models support setting topK and temperature (clamped between 0.0 and 1.0), but not topP.
+ */
+fun createAICoreConfigs(
+  defaultMaxToken: Int = DEFAULT_MAX_TOKEN,
+  defaultTopK: Int = DEFAULT_TOPK,
+  defaultTemperature: Float = DEFAULT_TEMPERATURE,
+  accelerators: List<Accelerator> = DEFAULT_ACCELERATORS,
+  defaultMaxOutputTokens: Int = DEFAULT_MAX_OUTPUT_TOKEN,
+): List<Config> {
+  return listOf(
+    LabelConfig(key = ConfigKeys.MAX_TOKENS, defaultValue = "$defaultMaxToken"),
+    NumberSliderConfig(
+      key = ConfigKeys.MAX_OUTPUT_TOKENS,
+      sliderMin = 100f,
+      sliderMax = 4096f,
+      defaultValue = defaultMaxOutputTokens.toFloat(),
+      valueType = ValueType.INT,
+    ),
+    NumberSliderConfig(
+      key = ConfigKeys.TOPK,
+      sliderMin = 1f,
+      sliderMax = 100f,
+      defaultValue = defaultTopK.toFloat(),
+      valueType = ValueType.INT,
+    ),
+    NumberSliderConfig(
+      key = ConfigKeys.TEMPERATURE,
+      sliderMin = 0.0f,
+      sliderMax = 1.0f,
+      defaultValue = defaultTemperature,
+      valueType = ValueType.FLOAT,
+    ),
     SegmentedButtonConfig(
       key = ConfigKeys.ACCELERATOR,
       defaultValue = accelerators[0].label,

@@ -23,7 +23,6 @@ import androidx.datastore.core.Serializer
 import androidx.datastore.dataStoreFile
 import com.google.ai.edge.gallery.AppLifecycleProvider
 import com.google.ai.edge.gallery.BenchmarkResultsSerializer
-import com.google.ai.edge.gallery.ChatHistorySerializer
 import com.google.ai.edge.gallery.CutoutsSerializer
 import com.google.ai.edge.gallery.GalleryLifecycleProvider
 import com.google.ai.edge.gallery.SettingsSerializer
@@ -34,11 +33,11 @@ import com.google.ai.edge.gallery.data.DefaultDataStoreRepository
 import com.google.ai.edge.gallery.data.DefaultDownloadRepository
 import com.google.ai.edge.gallery.data.DownloadRepository
 import com.google.ai.edge.gallery.proto.BenchmarkResults
-import com.google.ai.edge.gallery.proto.ChatHistoryCollection
 import com.google.ai.edge.gallery.proto.CutoutCollection
 import com.google.ai.edge.gallery.proto.Settings
 import com.google.ai.edge.gallery.proto.Skills
 import com.google.ai.edge.gallery.proto.UserData
+import com.squareup.moshi.Moshi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -83,13 +82,6 @@ internal object AppModule {
   @Singleton
   fun provideSkillsSerializer(): Serializer<Skills> {
     return SkillsSerializer
-  }
-
-  // Provides the ChatHistorySerializer
-  @Provides
-  @Singleton
-  fun provideChatHistorySerializer(): Serializer<ChatHistoryCollection> {
-    return ChatHistorySerializer
   }
 
   // Provides DataStore<Settings>
@@ -157,19 +149,6 @@ internal object AppModule {
     )
   }
 
-  // Provides DataStore<ChatHistoryCollection>
-  @Provides
-  @Singleton
-  fun provideChatHistoryDataStore(
-    @ApplicationContext context: Context,
-    chatHistorySerializer: Serializer<ChatHistoryCollection>,
-  ): DataStore<ChatHistoryCollection> {
-    return DataStoreFactory.create(
-      serializer = chatHistorySerializer,
-      produceFile = { context.dataStoreFile("chats.pb") },
-    )
-  }
-
   // Provides AppLifecycleProvider
   @Provides
   @Singleton
@@ -186,7 +165,6 @@ internal object AppModule {
     cutoutsDataStore: DataStore<CutoutCollection>,
     benchmarkResultsStore: DataStore<BenchmarkResults>,
     skillsDataStore: DataStore<Skills>,
-    chatHistoryDataStore: DataStore<ChatHistoryCollection>,
   ): DataStoreRepository {
     return DefaultDataStoreRepository(
       dataStore,
@@ -194,7 +172,6 @@ internal object AppModule {
       cutoutsDataStore,
       benchmarkResultsStore,
       skillsDataStore,
-      chatHistoryDataStore,
     )
   }
 
@@ -206,5 +183,11 @@ internal object AppModule {
     lifecycleProvider: AppLifecycleProvider,
   ): DownloadRepository {
     return DefaultDownloadRepository(context, lifecycleProvider)
+  }
+
+  @Provides
+  @Singleton
+  fun provideMoshi(): Moshi {
+    return Moshi.Builder().build()
   }
 }

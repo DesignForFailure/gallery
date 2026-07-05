@@ -52,6 +52,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,6 +63,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -83,6 +85,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
@@ -126,6 +129,7 @@ import com.google.ai.edge.gallery.common.decodeSampledBitmapFromUri
 import com.google.ai.edge.gallery.common.rotateBitmap
 import com.google.ai.edge.gallery.data.MAX_AUDIO_CLIP_COUNT
 import com.google.ai.edge.gallery.data.MAX_IMAGE_COUNT
+import com.google.ai.edge.gallery.data.MAX_IMAGE_COUNT_AI_CORE
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.SAMPLE_RATE
 import com.google.ai.edge.gallery.data.Task
@@ -155,6 +159,8 @@ fun MessageInputText(
   inProgress: Boolean,
   imageCount: Int,
   audioClipMessageCount: Int,
+  skillCount: Int = 0,
+  mcpCount: Int = 0,
   modelInitializing: Boolean,
   @StringRes textFieldPlaceHolderRes: Int,
   onValueChanged: (String) -> Unit,
@@ -165,14 +171,18 @@ fun MessageInputText(
   onSetAudioRecorderVisible: (visible: Boolean) -> Unit = {},
   onAmplitudeChanged: (Int) -> Unit,
   onSkillsClicked: () -> Unit = {},
+  onMcpClicked: () -> Unit = {},
   onPickedImagesChanged: (List<Bitmap>) -> Unit = {},
   onPickedAudioClipsChanged: (List<AudioClip>) -> Unit = {},
   showPromptTemplatesInMenu: Boolean = false,
   showSkillsPicker: Boolean = false,
+  showMcpPicker: Boolean = false,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
   showStopButtonWhenInProgress: Boolean = false,
   onImageLimitExceeded: () -> Unit = {},
+  onModelNotSupportImage: () -> Unit = {},
+  onModelNotSupportAudio: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -190,7 +200,11 @@ fun MessageInputText(
   val sensorObserver = remember { SensorObserver(context) }
 
   val updatePickedImages: (List<Bitmap>) -> Unit = { bitmaps ->
+    val isAiCore = modelManagerUiState.selectedModel.runtimeType == RuntimeType.AICORE
     var limit = MAX_IMAGE_COUNT
+    if (isAiCore) {
+      limit = MAX_IMAGE_COUNT_AI_CORE
+    }
     val maxAllowedForThisMessage = (limit - imageCount).coerceAtLeast(0)
 
     val combinedSize = pickedImages.size + bitmaps.size
@@ -200,6 +214,9 @@ fun MessageInputText(
       if (withinLimit) {
         pickedImages + bitmaps
       } else {
+        if (isAiCore) {
+          scope.launch(Dispatchers.Main) { onImageLimitExceeded() }
+        }
         (pickedImages + bitmaps).take(maxAllowedForThisMessage)
       }
   }
@@ -431,8 +448,21 @@ fun MessageInputText(
                       onDismissRequest = { showAddContentMenu = false },
                     ) {
                       if (showImagePicker) {
+                        val isImageLimitExceededForAiCore =
+                          modelManagerUiState.selectedModel.runtimeType == RuntimeType.AICORE &&
+                            (imageCount + pickedImages.size) >= MAX_IMAGE_COUNT_AI_CORE
                         val enableAddImageMenuItems =
                           (imageCount + pickedImages.size) < MAX_IMAGE_COUNT
+                        val isImageSupported = modelManagerUiState.selectedModel.llmSupportImage
+                        val imageItemColors =
+                          MenuDefaults.itemColors(
+                            textColor =
+                              if (isImageSupported) Color.Unspecified
+                              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            leadingIconColor =
+                              if (isImageSupported) Color.Unspecified
+                              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                          )
                         // Take a picture.
                         DropdownMenuItem(
                           text = {
@@ -445,7 +475,18 @@ fun MessageInputText(
                             }
                           },
                           enabled = enableAddImageMenuItems,
+                          colors = imageItemColors,
                           onClick = {
+                            if (!isImageSupported) {
+                              onModelNotSupportImage()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
+                            if (isImageLimitExceededForAiCore) {
+                              onImageLimitExceeded()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
                             // Check permission
                             when (PackageManager.PERMISSION_GRANTED) {
                               // Already got permission. Call the lambda.
@@ -477,7 +518,18 @@ fun MessageInputText(
                             }
                           },
                           enabled = enableAddImageMenuItems,
+                          colors = imageItemColors,
                           onClick = {
+                            if (!isImageSupported) {
+                              onModelNotSupportImage()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
+                            if (isImageLimitExceededForAiCore) {
+                              onImageLimitExceeded()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
                             // Launch the photo picker and let the user choose only images.
                             pickMedia.launch(
                               PickVisualMediaRequest(
@@ -493,6 +545,16 @@ fun MessageInputText(
                       if (showAudioPicker) {
                         val enableRecordAudioClipMenuItems =
                           (audioClipMessageCount + pickedAudioClips.size) < MAX_AUDIO_CLIP_COUNT
+                        val isAudioSupported = modelManagerUiState.selectedModel.llmSupportAudio
+                        val audioItemColors =
+                          MenuDefaults.itemColors(
+                            textColor =
+                              if (isAudioSupported) Color.Unspecified
+                              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                            leadingIconColor =
+                              if (isAudioSupported) Color.Unspecified
+                              else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                          )
                         DropdownMenuItem(
                           text = {
                             Row(
@@ -504,7 +566,13 @@ fun MessageInputText(
                             }
                           },
                           enabled = enableRecordAudioClipMenuItems,
+                          colors = audioItemColors,
                           onClick = {
+                            if (!isAudioSupported) {
+                              onModelNotSupportAudio()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
                             // Check permission
                             when (PackageManager.PERMISSION_GRANTED) {
                               // Already got permission. Call the lambda.
@@ -536,7 +604,13 @@ fun MessageInputText(
                             }
                           },
                           enabled = enableRecordAudioClipMenuItems,
+                          colors = audioItemColors,
                           onClick = {
+                            if (!isAudioSupported) {
+                              onModelNotSupportAudio()
+                              showAddContentMenu = false
+                              return@DropdownMenuItem
+                            }
                             showAddContentMenu = false
 
                             // Show file picker.
@@ -583,8 +657,58 @@ fun MessageInputText(
                     OutlinedButton(
                       onClick = onSkillsClicked,
                       enabled = !inProgress && !isResettingSession && !modelInitializing,
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     ) {
-                      Text(stringResource(R.string.skills))
+                      val skillsLabel = stringResource(R.string.skills)
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(skillsLabel)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Box(
+                          contentAlignment = Alignment.Center,
+                          modifier =
+                            Modifier.background(
+                                MaterialTheme.colorScheme.surfaceContainer,
+                                shape = CircleShape,
+                              )
+                              .height(18.dp)
+                              .widthIn(min = 18.dp),
+                        ) {
+                          Text(
+                            text = skillCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                          )
+                        }
+                      }
+                    }
+                  }
+
+                  // MCP.
+                  if (showMcpPicker) {
+                    OutlinedButton(
+                      onClick = onMcpClicked,
+                      enabled = !inProgress && !isResettingSession && !modelInitializing,
+                      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                      val mcpLabel = stringResource(R.string.mcp)
+                      Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(mcpLabel)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Box(
+                          contentAlignment = Alignment.Center,
+                          modifier =
+                            Modifier.background(
+                                MaterialTheme.colorScheme.surfaceContainer,
+                                shape = CircleShape,
+                              )
+                              .height(18.dp)
+                              .widthIn(min = 18.dp),
+                        ) {
+                          Text(
+                            text = mcpCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                          )
+                        }
+                      }
                     }
                   }
                 }

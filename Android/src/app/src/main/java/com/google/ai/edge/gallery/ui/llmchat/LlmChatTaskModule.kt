@@ -29,22 +29,26 @@ import androidx.compose.material.icons.outlined.Mms
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Category
-import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.runtime.runtimeHelper
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import com.google.ai.edge.litertlm.Contents
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -56,8 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // AI Chat.
 
-class LlmChatTask @Inject constructor(private val dataStoreRepository: DataStoreRepository) :
-  CustomTask {
+class LlmChatTask @Inject constructor() : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_CHAT,
@@ -77,19 +80,18 @@ class LlmChatTask @Inject constructor(private val dataStoreRepository: DataStore
     context: Context,
     coroutineScope: CoroutineScope,
     model: Model,
+    systemInstruction: Contents?,
     onDone: (String) -> Unit,
   ) {
     model.runtimeHelper.initialize(
       context = context,
       model = model,
+      taskId = task.id,
       supportImage = false,
       supportAudio = false,
       onDone = onDone,
-      // Inject the global LLM memory and the active stored chat's transcript so restored chats
-      // continue seamlessly.
-      systemInstruction =
-        composeInitSystemInstruction(dataStoreRepository = dataStoreRepository, taskId = task.id),
       coroutineScope = coroutineScope,
+      systemInstruction = systemInstruction,
     )
   }
 
@@ -105,9 +107,25 @@ class LlmChatTask @Inject constructor(private val dataStoreRepository: DataStore
   @Composable
   override fun MainScreen(data: Any) {
     val myData = data as CustomTaskDataForBuiltinTask
+    val viewModel: LlmChatViewModel = hiltViewModel()
+    LaunchedEffect(task) { viewModel.loadSystemPrompt(task) }
+    val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
+    val systemPromptUpdatedMessage = stringResource(R.string.system_prompt_updated)
     LlmChatScreen(
       modelManagerViewModel = myData.modelManagerViewModel,
       navigateUp = myData.onNavUp,
+      viewModel = viewModel,
+      allowEditingSystemPrompt = true,
+      curSystemPrompt = uiSystemPrompt,
+      onSystemPromptChanged = { newPrompt ->
+        val selectedModel = myData.modelManagerViewModel.uiState.value.selectedModel
+        viewModel.applySystemPromptChange(
+          task = task,
+          model = selectedModel,
+          newPrompt = newPrompt,
+          systemPromptUpdatedMessage = systemPromptUpdatedMessage,
+        )
+      },
       emptyStateComposable = {
         Box(modifier = Modifier.fillMaxSize()) {
           Column(
@@ -135,16 +153,15 @@ class LlmChatTask @Inject constructor(private val dataStoreRepository: DataStore
 internal object LlmChatTaskModule {
   @Provides
   @IntoSet
-  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
-    return LlmChatTask(dataStoreRepository = dataStoreRepository)
+  fun provideTask(): CustomTask {
+    return LlmChatTask()
   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Ask image.
 
-class LlmAskImageTask @Inject constructor(private val dataStoreRepository: DataStoreRepository) :
-  CustomTask {
+class LlmAskImageTask @Inject constructor() : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_ASK_IMAGE,
@@ -164,18 +181,18 @@ class LlmAskImageTask @Inject constructor(private val dataStoreRepository: DataS
     context: Context,
     coroutineScope: CoroutineScope,
     model: Model,
+    systemInstruction: Contents?,
     onDone: (String) -> Unit,
   ) {
     model.runtimeHelper.initialize(
       context = context,
       model = model,
+      taskId = task.id,
       supportImage = true,
       supportAudio = false,
       onDone = onDone,
-      // Inject the global LLM memory.
-      systemInstruction =
-        composeInitSystemInstruction(dataStoreRepository = dataStoreRepository, taskId = task.id),
       coroutineScope = coroutineScope,
+      systemInstruction = systemInstruction,
     )
   }
 
@@ -191,9 +208,25 @@ class LlmAskImageTask @Inject constructor(private val dataStoreRepository: DataS
   @Composable
   override fun MainScreen(data: Any) {
     val myData = data as CustomTaskDataForBuiltinTask
+    val viewModel: LlmAskImageViewModel = hiltViewModel()
+    LaunchedEffect(task) { viewModel.loadSystemPrompt(task) }
+    val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
+    val systemPromptUpdatedMessage = stringResource(R.string.system_prompt_updated)
     LlmAskImageScreen(
       modelManagerViewModel = myData.modelManagerViewModel,
       navigateUp = myData.onNavUp,
+      viewModel = viewModel,
+      allowEditingSystemPrompt = true,
+      curSystemPrompt = uiSystemPrompt,
+      onSystemPromptChanged = { newPrompt ->
+        val selectedModel = myData.modelManagerViewModel.uiState.value.selectedModel
+        viewModel.applySystemPromptChange(
+          task = task,
+          model = selectedModel,
+          newPrompt = newPrompt,
+          systemPromptUpdatedMessage = systemPromptUpdatedMessage,
+        )
+      },
     )
   }
 }
@@ -203,16 +236,15 @@ class LlmAskImageTask @Inject constructor(private val dataStoreRepository: DataS
 internal object LlmAskImageModule {
   @Provides
   @IntoSet
-  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
-    return LlmAskImageTask(dataStoreRepository = dataStoreRepository)
+  fun provideTask(): CustomTask {
+    return LlmAskImageTask()
   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Ask audio.
 
-class LlmAskAudioTask @Inject constructor(private val dataStoreRepository: DataStoreRepository) :
-  CustomTask {
+class LlmAskAudioTask @Inject constructor() : CustomTask {
   override val task: Task =
     Task(
       id = BuiltInTaskId.LLM_ASK_AUDIO,
@@ -233,18 +265,18 @@ class LlmAskAudioTask @Inject constructor(private val dataStoreRepository: DataS
     context: Context,
     coroutineScope: CoroutineScope,
     model: Model,
+    systemInstruction: Contents?,
     onDone: (String) -> Unit,
   ) {
     model.runtimeHelper.initialize(
       context = context,
       model = model,
+      taskId = task.id,
       supportImage = false,
       supportAudio = true,
       onDone = onDone,
-      // Inject the global LLM memory.
-      systemInstruction =
-        composeInitSystemInstruction(dataStoreRepository = dataStoreRepository, taskId = task.id),
       coroutineScope = coroutineScope,
+      systemInstruction = systemInstruction,
     )
   }
 
@@ -260,9 +292,25 @@ class LlmAskAudioTask @Inject constructor(private val dataStoreRepository: DataS
   @Composable
   override fun MainScreen(data: Any) {
     val myData = data as CustomTaskDataForBuiltinTask
+    val viewModel: LlmAskAudioViewModel = hiltViewModel()
+    LaunchedEffect(task) { viewModel.loadSystemPrompt(task) }
+    val uiSystemPrompt by viewModel.uiSystemPrompt.collectAsState()
+    val systemPromptUpdatedMessage = stringResource(R.string.system_prompt_updated)
     LlmAskAudioScreen(
       modelManagerViewModel = myData.modelManagerViewModel,
       navigateUp = myData.onNavUp,
+      viewModel = viewModel,
+      allowEditingSystemPrompt = true,
+      curSystemPrompt = uiSystemPrompt,
+      onSystemPromptChanged = { newPrompt ->
+        val selectedModel = myData.modelManagerViewModel.uiState.value.selectedModel
+        viewModel.applySystemPromptChange(
+          task = task,
+          model = selectedModel,
+          newPrompt = newPrompt,
+          systemPromptUpdatedMessage = systemPromptUpdatedMessage,
+        )
+      },
     )
   }
 }
@@ -272,7 +320,7 @@ class LlmAskAudioTask @Inject constructor(private val dataStoreRepository: DataS
 internal object LlmAskAudioModule {
   @Provides
   @IntoSet
-  fun provideTask(dataStoreRepository: DataStoreRepository): CustomTask {
-    return LlmAskAudioTask(dataStoreRepository = dataStoreRepository)
+  fun provideTask(): CustomTask {
+    return LlmAskAudioTask()
   }
 }

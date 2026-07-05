@@ -19,20 +19,16 @@ package com.google.ai.edge.gallery.ui.llmchat
 import androidx.hilt.navigation.compose.hiltViewModel
 
 import android.graphics.Bitmap
+import android.os.Bundle
+import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,24 +36,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.os.bundleOf
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.ModelCapability
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.firebaseAnalytics
-import com.google.ai.edge.gallery.proto.StoredChat
+import com.google.ai.edge.gallery.ui.common.chat.ChatMessage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageImage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
+import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.ChatView
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
-import kotlinx.coroutines.launch
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Message
 
 private const val TAG = "AGLlmChatScreen"
 
@@ -70,7 +68,9 @@ fun LlmChatScreen(
   onFirstToken: (Model) -> Unit = {},
   onGenerateResponseDone: (Model) -> Unit = {},
   onSkillClicked: () -> Unit = {},
-  onResetSessionClickedOverride: ((Task, Model) -> Unit)? = null,
+  onMcpClicked: () -> Unit = {},
+  onResetSessionClickedOverride: ((Task, Model, List<ChatMessage>, Boolean, () -> Unit) -> Unit)? =
+    null,
   composableBelowMessageList: @Composable (Model) -> Unit = {},
   viewModel: LlmChatViewModel = hiltViewModel(),
   allowEditingSystemPrompt: Boolean = false,
@@ -80,10 +80,10 @@ fun LlmChatScreen(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
-  agentSystemPromptProvider: (() -> String)? = null,
-  onChatActivated: ((StoredChat) -> Unit)? = null,
-  systemInstructionBuilder: ChatSystemInstructionBuilder? = null,
-  sessionResetter: ChatSessionResetter? = null,
+  getActiveSkills: () -> List<String> = { emptyList() },
+  skillCount: Int = 0,
+  mcpCount: Int = 0,
+  mcpToolsCount: Int = 0,
 ) {
   ChatViewWrapper(
     viewModel = viewModel,
@@ -92,21 +92,22 @@ fun LlmChatScreen(
     navigateUp = navigateUp,
     modifier = modifier,
     onSkillClicked = onSkillClicked,
+    onMcpClicked = onMcpClicked,
     onFirstToken = onFirstToken,
     onGenerateResponseDone = onGenerateResponseDone,
     onResetSessionClickedOverride = onResetSessionClickedOverride,
     composableBelowMessageList = composableBelowMessageList,
     allowEditingSystemPrompt = allowEditingSystemPrompt,
     curSystemPrompt = curSystemPrompt,
+    skillCount = skillCount,
+    mcpCount = mcpCount,
+    mcpToolsCount = mcpToolsCount,
     onSystemPromptChanged = onSystemPromptChanged,
     emptyStateComposable = emptyStateComposable,
     sendMessageTrigger = sendMessageTrigger,
     showImagePicker = showImagePicker,
     showAudioPicker = showAudioPicker,
-    agentSystemPromptProvider = agentSystemPromptProvider,
-    onChatActivated = onChatActivated,
-    systemInstructionBuilder = systemInstructionBuilder,
-    sessionResetter = sessionResetter,
+    getActiveSkills = getActiveSkills,
   )
 }
 
@@ -116,6 +117,9 @@ fun LlmAskImageScreen(
   navigateUp: () -> Unit,
   modifier: Modifier = Modifier,
   viewModel: LlmAskImageViewModel = hiltViewModel(),
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
 ) {
   ChatViewWrapper(
     viewModel = viewModel,
@@ -123,6 +127,9 @@ fun LlmAskImageScreen(
     taskId = BuiltInTaskId.LLM_ASK_IMAGE,
     navigateUp = navigateUp,
     modifier = modifier,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = onSystemPromptChanged,
     showImagePicker = true,
     showAudioPicker = false,
     emptyStateComposable = { model ->
@@ -134,7 +141,12 @@ fun LlmAskImageScreen(
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           Text(stringResource(R.string.askimage_emptystate_title), style = emptyStateTitle)
-          var contentRes = R.string.askimage_emptystate_content
+          val contentRes =
+            if (model.runtimeType == RuntimeType.AICORE) {
+              R.string.askimage_emptystate_content_aicore
+            } else {
+              R.string.askimage_emptystate_content
+            }
           Text(
             stringResource(contentRes),
             style = emptyStateContent,
@@ -153,6 +165,9 @@ fun LlmAskAudioScreen(
   navigateUp: () -> Unit,
   modifier: Modifier = Modifier,
   viewModel: LlmAskAudioViewModel = hiltViewModel(),
+  allowEditingSystemPrompt: Boolean = false,
+  curSystemPrompt: String = "",
+  onSystemPromptChanged: (String) -> Unit = {},
 ) {
   ChatViewWrapper(
     viewModel = viewModel,
@@ -160,6 +175,9 @@ fun LlmAskAudioScreen(
     taskId = BuiltInTaskId.LLM_ASK_AUDIO,
     navigateUp = navigateUp,
     modifier = modifier,
+    allowEditingSystemPrompt = allowEditingSystemPrompt,
+    curSystemPrompt = curSystemPrompt,
+    onSystemPromptChanged = onSystemPromptChanged,
     showImagePicker = false,
     showAudioPicker = true,
     emptyStateComposable = {
@@ -191,9 +209,11 @@ fun ChatViewWrapper(
   navigateUp: () -> Unit,
   modifier: Modifier = Modifier,
   onSkillClicked: () -> Unit = {},
+  onMcpClicked: () -> Unit = {},
   onFirstToken: (Model) -> Unit = {},
   onGenerateResponseDone: (Model) -> Unit = {},
-  onResetSessionClickedOverride: ((Task, Model) -> Unit)? = null,
+  onResetSessionClickedOverride: ((Task, Model, List<ChatMessage>, Boolean, () -> Unit) -> Unit)? =
+    null,
   composableBelowMessageList: @Composable (Model) -> Unit = {},
   emptyStateComposable: @Composable (Model) -> Unit = {},
   allowEditingSystemPrompt: Boolean = false,
@@ -202,57 +222,16 @@ fun ChatViewWrapper(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
-  agentSystemPromptProvider: (() -> String)? = null,
-  onChatActivated: ((StoredChat) -> Unit)? = null,
-  systemInstructionBuilder: ChatSystemInstructionBuilder? = null,
-  sessionResetter: ChatSessionResetter? = null,
+  getActiveSkills: () -> List<String> = { emptyList() },
+  skillCount: Int = 0,
+  mcpCount: Int = 0,
+  mcpToolsCount: Int = 0,
 ) {
   val context = LocalContext.current
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
-  val allowThinking = task.allowThinking()
-
-  // Chat history (persistent chats) support.
-  val enableChatHistory = taskId in CHAT_HISTORY_TASK_IDS
   val scope = rememberCoroutineScope()
-  val drawerState = rememberDrawerState(DrawerValue.Closed)
-  val chats by viewModel.chats.collectAsState()
-  val activeChatId by viewModel.activeChatId.collectAsState()
-  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
-  val selectedModel = modelManagerUiState.selectedModel
 
-  // Composes the system instruction for a chat session. Plain chat tasks combine the global LLM
-  // memory with the pseudo-replay transcript; Agent Chat supplies its own builder that also
-  // layers the skill prompt.
-  val instructionBuilder: ChatSystemInstructionBuilder =
-    systemInstructionBuilder
-      ?: { memory, transcript, _ -> buildSystemInstruction(memory = memory, priorTranscript = transcript) }
-  val resetter: ChatSessionResetter =
-    sessionResetter
-      ?: { curTask, curModel, systemInstruction, onDone ->
-        viewModel.resetSession(
-          task = curTask,
-          model = curModel,
-          systemInstruction = systemInstruction,
-          supportImage = showImagePicker,
-          supportAudio = showAudioPicker,
-          onDone = onDone,
-        )
-      }
-  val currentAgentSystemPrompt = { agentSystemPromptProvider?.invoke() ?: "" }
-
-  if (enableChatHistory) {
-    // Restore the active stored chat into the UI when entering the screen (or switching models).
-    // The LLM session itself gets the stored transcript through the system instruction composed
-    // during model initialization.
-    LaunchedEffect(selectedModel.name) {
-      viewModel.restoreActiveChat(taskId = taskId, model = selectedModel) { storedChat ->
-        onChatActivated?.invoke(storedChat)
-      }
-    }
-  }
-
-  val chatView: @Composable () -> Unit = {
-    ChatView(
+  ChatView(
     task = task,
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
@@ -285,16 +264,7 @@ fun ChatViewWrapper(
           images = images,
           audioMessages = audioMessages,
           onFirstToken = onFirstToken,
-          onDone = {
-            if (enableChatHistory) {
-              viewModel.persistCurrentChat(
-                model = model,
-                taskId = taskId,
-                agentSystemPrompt = currentAgentSystemPrompt(),
-              )
-            }
-            onGenerateResponseDone(model)
-          },
+          onDone = { onGenerateResponseDone(model) },
           onError = { errorMessage ->
             viewModel.handleError(
               context = context,
@@ -304,12 +274,28 @@ fun ChatViewWrapper(
               modelManagerViewModel = modelManagerViewModel,
             )
           },
-          allowThinking = allowThinking,
+          allowThinking = task.allowCapability(ModelCapability.LLM_THINKING, model),
         )
 
+        val activeSkills = getActiveSkills()
+        Log.d(
+          TAG,
+          "Analytics: generate_action, capability_name=${task.id}, active_skills=${activeSkills.joinToString(",")}, active_mcp_servers_count=$mcpCount, active_mcp_tools_count=$mcpToolsCount",
+        )
         firebaseAnalytics?.logEvent(
           GalleryEvent.GENERATE_ACTION.id,
-          bundleOf("capability_name" to task.id, "model_id" to model.name),
+          Bundle().apply {
+            putString("capability_name", task.id)
+            putString("model_id", model.name)
+            putBoolean("has_image", images.isNotEmpty())
+            putInt("image_count", images.size)
+            putBoolean("has_audio", audioMessages.isNotEmpty())
+            putInt("audio_count", audioMessages.size)
+            putInt("active_skills_count", activeSkills.size)
+            putString("active_skills_list", activeSkills.joinToString(","))
+            putInt("active_mcp_servers_count", mcpCount)
+            putInt("active_mcp_tools_count", mcpToolsCount)
+          },
         )
       }
     },
@@ -327,37 +313,35 @@ fun ChatViewWrapper(
               modelManagerViewModel = modelManagerViewModel,
             )
           },
-          allowThinking = allowThinking,
+          allowThinking = task.allowCapability(ModelCapability.LLM_THINKING, model),
         )
       }
     },
     onBenchmarkClicked = { _, _, _, _ -> },
-    onResetSessionClicked = { model ->
-      if (enableChatHistory) {
-        // Resetting the session starts a new chat so the current one stays intact in history.
-        viewModel.newChat(
-          task = task,
-          model = model,
-          agentSystemPrompt = currentAgentSystemPrompt(),
-          systemInstructionBuilder = instructionBuilder,
-          sessionResetter = resetter,
-        )
-      } else if (onResetSessionClickedOverride != null) {
-        onResetSessionClickedOverride(task, model)
+    onResetSessionClicked = { model, chatMessages, clearHistory, onDone ->
+      val litertMessages = chatMessages.mapNotNull { convertToLitertMessage(it) }
+      if (onResetSessionClickedOverride != null) {
+        onResetSessionClickedOverride(task, model, chatMessages, clearHistory, onDone)
       } else {
         viewModel.resetSession(
           task = task,
           model = model,
-          systemInstruction = buildSystemInstruction(memory = viewModel.getLlmMemory()),
+          systemInstruction = Contents.of(curSystemPrompt),
           supportImage = showImagePicker,
           supportAudio = showAudioPicker,
+          initialMessages = litertMessages,
+          onDone = onDone,
+          clearHistory = clearHistory,
         )
       }
     },
     showStopButtonInInputWhenInProgress = true,
     onStopButtonClicked = { model -> viewModel.stopResponse(model = model) },
     onSkillClicked = onSkillClicked,
+    onMcpClicked = onMcpClicked,
     navigateUp = navigateUp,
+    skillCount = skillCount,
+    mcpCount = mcpCount,
     modifier = modifier,
     composableBelowMessageList = composableBelowMessageList,
     showImagePicker = showImagePicker,
@@ -367,65 +351,20 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
-    onOpenChatListClicked =
-      if (enableChatHistory) {
-        { scope.launch { drawerState.open() } }
-      } else {
-        null
-      },
   )
-  }
+}
 
-  if (enableChatHistory) {
-    ModalNavigationDrawer(
-      drawerState = drawerState,
-      // Only intercept horizontal swipes while the drawer is open to avoid conflicting with
-      // in-chat gestures.
-      gesturesEnabled = drawerState.isOpen,
-      drawerContent = {
-        ChatListDrawerContent(
-          chats = chats,
-          activeChatId = activeChatId,
-          onNewChatClicked = {
-            scope.launch { drawerState.close() }
-            viewModel.newChat(
-              task = task,
-              model = selectedModel,
-              agentSystemPrompt = currentAgentSystemPrompt(),
-              systemInstructionBuilder = instructionBuilder,
-              sessionResetter = resetter,
-            )
-          },
-          onChatClicked = { storedChat ->
-            scope.launch { drawerState.close() }
-            if (storedChat.id != activeChatId) {
-              viewModel.switchChat(
-                task = task,
-                model = selectedModel,
-                targetChat = storedChat,
-                currentAgentSystemPrompt = currentAgentSystemPrompt(),
-                systemInstructionBuilder = instructionBuilder,
-                sessionResetter = resetter,
-                onActivated = { onChatActivated?.invoke(it) },
-              )
-            }
-          },
-          onDeleteChatClicked = { storedChat ->
-            viewModel.deleteChat(
-              task = task,
-              model = selectedModel,
-              chatId = storedChat.id,
-              agentSystemPrompt = currentAgentSystemPrompt(),
-              systemInstructionBuilder = instructionBuilder,
-              sessionResetter = resetter,
-            )
-          },
-        )
-      },
-    ) {
-      chatView()
+private fun convertToLitertMessage(chatMessage: ChatMessage): Message? {
+  // TODO: Restore image and audio messages to the LLM context.
+  // We are currently bypassing them because the image and audio encoder may take
+  // too long during chat history loading, which can cause stalls or stream errors.
+  if (chatMessage is ChatMessageText) {
+    return when (chatMessage.side) {
+      ChatSide.USER -> Message.user(chatMessage.content)
+      ChatSide.AGENT -> Message.model(chatMessage.content)
+      ChatSide.SYSTEM ->
+        null // TODO: Support SYSTEM role once we can decide on which system prompt to use.
     }
-  } else {
-    chatView()
   }
+  return null
 }

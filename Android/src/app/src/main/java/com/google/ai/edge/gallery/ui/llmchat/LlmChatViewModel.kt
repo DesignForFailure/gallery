@@ -19,15 +19,18 @@ package com.google.ai.edge.gallery.ui.llmchat
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.datastore.core.DataStore
 import androidx.lifecycle.viewModelScope
+import com.google.ai.edge.gallery.common.SystemPromptHelper
 import com.google.ai.edge.gallery.data.ConfigKeys
-import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.SystemPromptRepository
 import com.google.ai.edge.gallery.data.Task
-import com.google.ai.edge.gallery.proto.StoredChat
+import com.google.ai.edge.gallery.proto.UserData
 import com.google.ai.edge.gallery.runtime.runtimeHelper
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageError
+import com.google.ai.edge.gallery.ui.common.chat.ChatMessageInfo
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageLoading
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageThinking
@@ -38,9 +41,9 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.ToolProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -50,193 +53,70 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "AGLlmChatViewModel"
 
-/**
- * Builds the system instruction for a chat session.
- *
- * Receives the global LLM memory, the pseudo-replay transcript of the chat being (re-)activated
- * (empty for new chats), and the agent system prompt associated with the chat (only used by Agent
- * Chat).
- */
-typealias ChatSystemInstructionBuilder =
-  (memory: String, transcript: String, agentSystemPrompt: String) -> Contents?
-
-/** Resets the underlying LLM session with the given system instruction. */
-typealias ChatSessionResetter =
-  (task: Task, model: Model, systemInstruction: Contents?, onDone: () -> Unit) -> Unit
-
 @OptIn(ExperimentalApi::class)
-open class LlmChatViewModelBase(val dataStoreRepository: DataStoreRepository) : ChatViewModel() {
-  private val _chats = MutableStateFlow<List<StoredChat>>(listOf())
-  /** Stored chats for this view model's task, sorted by last update (most recent first). */
-  val chats = _chats.asStateFlow()
-
-  private val _activeChatId = MutableStateFlow("")
-  val activeChatId = _activeChatId.asStateFlow()
-
-  fun getLlmMemory(): String = dataStoreRepository.getLlmMemory()
-
-  /** Loads stored chats and the active chat id for the given task from the data store. */
-  fun loadChats(taskId: String) {
-    viewModelScope.launch(Dispatchers.Default) {
-      _chats.value = readChatsForTask(taskId)
-      _activeChatId.value = dataStoreRepository.getActiveChatId(taskId)
-    }
-  }
+open class LlmChatViewModelBase(
+  private val systemPromptRepository: SystemPromptRepository? = null,
+  userDataDataStore: DataStore<UserData>? = null,
+  private val modelFeedbackRepository: Any? = null,
+) : ChatViewModel(userDataDataStore) {
+  private val _uiSystemPrompt = MutableStateFlow("")
+  val uiSystemPrompt = _uiSystemPrompt.asStateFlow()
 
   /**
-   * Restores the active stored chat (if any) into the UI for the given model.
+   * Sets the system prompt in the UI.
    *
-   * Called when the chat screen is (re-)entered. The LLM session itself is restored separately:
-   * model initialization composes its system instruction from the active chat's transcript.
+   * This method updates the UI system prompt without saving it to the repository or resetting the
+   * session. It is primarily used for initializing the UI system prompt.
+   *
+   * @param systemPrompt The new system prompt to set in the UI.
    */
-  fun restoreActiveChat(taskId: String, model: Model, onRestored: (StoredChat) -> Unit = {}) {
-    viewModelScope.launch(Dispatchers.Default) {
-      val chatsForTask = readChatsForTask(taskId)
-      _chats.value = chatsForTask
-      val activeId = dataStoreRepository.getActiveChatId(taskId)
-      _activeChatId.value = activeId
-      if (activeId.isEmpty()) {
-        return@launch
-      }
-      val activeChat = chatsForTask.find { it.id == activeId } ?: return@launch
-      // Only restore when the UI has no messages yet, so an in-memory conversation is never
-      // clobbered (e.g. when the view model survives a navigation).
-      if (uiState.value.messagesByModel[model.name].isNullOrEmpty()) {
-        setMessages(model = model, messages = activeChat.messagesJson.fromPersistedJson().toChatMessages())
-      }
-      onRestored(activeChat)
+  fun setUISystemPrompt(systemPrompt: String) {
+    _uiSystemPrompt.value = systemPrompt
+  }
+
+  /**
+   * Loads the system prompt for the given [task] from the repository.
+   *
+   * @param task The task to load the system prompt for.
+   */
+  fun loadSystemPrompt(task: Task) {
+    viewModelScope.launch {
+      val effectivePrompt =
+        SystemPromptHelper.getEffectiveSystemPrompt(systemPromptRepository, task)
+      _uiSystemPrompt.value = effectivePrompt
     }
   }
 
   /**
-   * Saves the current in-memory conversation to the data store, creating a new stored chat (with
-   * an auto-generated title) on first save.
+   * Applies a system prompt change to the given [task] and [model].
+   *
+   * This method updates the UI system prompt, saves the new prompt to the repository, and resets
+   * the session with the new prompt.
+   *
+   * @param task The task to apply the system prompt change to.
+   * @param model The model to apply the system prompt change to.
+   * @param newPrompt The new system prompt to apply.
+   * @param systemPromptUpdatedMessage The message to add to the chat after the system prompt is
+   *   updated.
    */
-  fun persistCurrentChat(model: Model, taskId: String, agentSystemPrompt: String = "") {
-    viewModelScope.launch(Dispatchers.Default) {
-      persistCurrentChatSync(model = model, taskId = taskId, agentSystemPrompt = agentSystemPrompt)
-    }
-  }
-
-  /** Starts a new empty chat: persists the current one, then resets the session. */
-  fun newChat(
+  fun applySystemPromptChange(
     task: Task,
     model: Model,
-    agentSystemPrompt: String = "",
-    systemInstructionBuilder: ChatSystemInstructionBuilder,
-    sessionResetter: ChatSessionResetter,
+    newPrompt: String,
+    systemPromptUpdatedMessage: String,
   ) {
-    viewModelScope.launch(Dispatchers.Default) {
-      persistCurrentChatSync(model = model, taskId = task.id, agentSystemPrompt = agentSystemPrompt)
-
-      val newChatId = UUID.randomUUID().toString()
-      dataStoreRepository.setActiveChatId(taskId = task.id, chatId = newChatId)
-      _activeChatId.value = newChatId
-
-      val systemInstruction =
-        systemInstructionBuilder(getLlmMemory(), "", agentSystemPrompt)
-      sessionResetter(task, model, systemInstruction) {}
-    }
-  }
-
-  /**
-   * Switches to a stored chat: persists the current one, resets the session with a pseudo-replay
-   * system instruction containing the stored transcript, then restores the stored messages.
-   */
-  fun switchChat(
-    task: Task,
-    model: Model,
-    targetChat: StoredChat,
-    currentAgentSystemPrompt: String = "",
-    systemInstructionBuilder: ChatSystemInstructionBuilder,
-    sessionResetter: ChatSessionResetter,
-    onActivated: (StoredChat) -> Unit = {},
-  ) {
-    viewModelScope.launch(Dispatchers.Default) {
-      persistCurrentChatSync(
+    _uiSystemPrompt.value = newPrompt
+    viewModelScope.launch {
+      systemPromptRepository?.updateSystemPrompt(task.id, newPrompt)
+      resetSession(
+        task = task,
         model = model,
-        taskId = task.id,
-        agentSystemPrompt = currentAgentSystemPrompt,
+        systemInstruction = Contents.of(newPrompt),
+        supportImage = true,
+        supportAudio = true,
+        onDone = { addMessage(model, ChatMessageInfo(content = systemPromptUpdatedMessage)) },
       )
-
-      dataStoreRepository.setActiveChatId(taskId = task.id, chatId = targetChat.id)
-      _activeChatId.value = targetChat.id
-
-      val persistedMessages = targetChat.messagesJson.fromPersistedJson()
-      val systemInstruction =
-        systemInstructionBuilder(
-          getLlmMemory(),
-          persistedMessages.toTranscriptBlock(),
-          targetChat.agentSystemPrompt,
-        )
-      onActivated(targetChat)
-      sessionResetter(task, model, systemInstruction) {
-        setMessages(model = model, messages = persistedMessages.toChatMessages())
-      }
     }
-  }
-
-  /** Deletes a stored chat. If it was the active one, starts a fresh session. */
-  fun deleteChat(
-    task: Task,
-    model: Model,
-    chatId: String,
-    agentSystemPrompt: String = "",
-    systemInstructionBuilder: ChatSystemInstructionBuilder,
-    sessionResetter: ChatSessionResetter,
-  ) {
-    viewModelScope.launch(Dispatchers.Default) {
-      dataStoreRepository.deleteChat(chatId = chatId)
-      _chats.value = _chats.value.filter { it.id != chatId }
-      if (_activeChatId.value == chatId) {
-        dataStoreRepository.setActiveChatId(taskId = task.id, chatId = "")
-        _activeChatId.value = ""
-        val systemInstruction = systemInstructionBuilder(getLlmMemory(), "", agentSystemPrompt)
-        sessionResetter(task, model, systemInstruction) {}
-      }
-    }
-  }
-
-  private fun persistCurrentChatSync(model: Model, taskId: String, agentSystemPrompt: String) {
-    val messages = uiState.value.messagesByModel[model.name] ?: listOf()
-    val persistedMessages = messages.toPersistedMessages()
-    if (persistedMessages.isEmpty()) {
-      return
-    }
-
-    val nowMs = System.currentTimeMillis()
-    var chatId = _activeChatId.value
-    if (chatId.isEmpty()) {
-      chatId = UUID.randomUUID().toString()
-      _activeChatId.value = chatId
-    }
-    val existingChat = _chats.value.find { it.id == chatId }
-
-    val storedChat =
-      StoredChat.newBuilder()
-        .setId(chatId)
-        .setTitle(existingChat?.title?.ifEmpty { null } ?: autoTitleFromMessages(messages))
-        .setCreatedAtMs(existingChat?.createdAtMs ?: nowMs)
-        .setUpdatedAtMs(nowMs)
-        .setModelName(model.name)
-        .setTaskId(taskId)
-        .setMessagesJson(persistedMessages.toJson())
-        .setAgentSystemPrompt(agentSystemPrompt)
-        .build()
-
-    dataStoreRepository.upsertChat(storedChat)
-    dataStoreRepository.setActiveChatId(taskId = taskId, chatId = chatId)
-    _chats.value =
-      (listOf(storedChat) + _chats.value.filter { it.id != chatId }).sortedByDescending {
-        it.updatedAtMs
-      }
-  }
-
-  private fun readChatsForTask(taskId: String): List<StoredChat> {
-    return dataStoreRepository
-      .getAllChats()
-      .filter { it.taskId == taskId }
-      .sortedByDescending { it.updatedAtMs }
   }
 
   fun generateResponse(
@@ -446,10 +326,14 @@ open class LlmChatViewModelBase(val dataStoreRepository: DataStoreRepository) : 
     supportAudio: Boolean = false,
     onDone: () -> Unit = {},
     enableConversationConstrainedDecoding: Boolean = false,
+    initialMessages: List<Message> = listOf(),
+    clearHistory: Boolean = true,
   ) {
     viewModelScope.launch(Dispatchers.Default) {
       setIsResettingSession(true)
-      clearAllMessages(model = model)
+      if (clearHistory) {
+        clearAllMessages(model = model)
+      }
       stopResponse(model = model)
 
       while (true) {
@@ -461,6 +345,7 @@ open class LlmChatViewModelBase(val dataStoreRepository: DataStoreRepository) : 
             systemInstruction = systemInstruction,
             tools = tools,
             enableConversationConstrainedDecoding = enableConversationConstrainedDecoding,
+            initialMessages = initialMessages,
           )
           break
         } catch (e: Exception) {
@@ -520,12 +405,26 @@ open class LlmChatViewModelBase(val dataStoreRepository: DataStoreRepository) : 
         task = task,
         model = model,
         onDone = {
-          modelManagerViewModel.initializeModel(context = context, task = task, model = model)
-
-          // Add a warning message for re-initializing the session.
-          addMessage(
+          modelManagerViewModel.initializeModel(
+            context = context,
+            task = task,
             model = model,
-            message = ChatMessageWarning(content = "Session re-initialized"),
+            onDone = {
+              // Add a warning message for re-initializing the session.
+              addMessage(
+                model = model,
+                message = ChatMessageWarning(content = "Session re-initialized"),
+              )
+            },
+            onError = {
+              addMessage(
+                model = model,
+                message =
+                  ChatMessageError(
+                    content = "Failed to re-initialize session, please restart the app"
+                  ),
+              )
+            },
           )
         },
       )
@@ -534,13 +433,25 @@ open class LlmChatViewModelBase(val dataStoreRepository: DataStoreRepository) : 
 }
 
 @HiltViewModel
-class LlmChatViewModel @Inject constructor(dataStoreRepository: DataStoreRepository) :
-  LlmChatViewModelBase(dataStoreRepository)
+class LlmChatViewModel
+@Inject
+constructor(
+  systemPromptRepository: SystemPromptRepository,
+  userDataDataStore: DataStore<UserData>,
+) : LlmChatViewModelBase(systemPromptRepository, userDataDataStore, null)
 
 @HiltViewModel
-class LlmAskImageViewModel @Inject constructor(dataStoreRepository: DataStoreRepository) :
-  LlmChatViewModelBase(dataStoreRepository)
+class LlmAskImageViewModel
+@Inject
+constructor(
+  systemPromptRepository: SystemPromptRepository,
+  userDataDataStore: DataStore<UserData>,
+) : LlmChatViewModelBase(systemPromptRepository, userDataDataStore, null)
 
 @HiltViewModel
-class LlmAskAudioViewModel @Inject constructor(dataStoreRepository: DataStoreRepository) :
-  LlmChatViewModelBase(dataStoreRepository)
+class LlmAskAudioViewModel
+@Inject
+constructor(
+  systemPromptRepository: SystemPromptRepository,
+  userDataDataStore: DataStore<UserData>,
+  ) : LlmChatViewModelBase(systemPromptRepository, userDataDataStore, null)
